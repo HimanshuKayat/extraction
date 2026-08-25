@@ -19,7 +19,7 @@ from agent.model import QwenModel
 
 ROOT = Path(__file__).resolve().parent
 
-# Change this filename if your master workbook has a different name.
+# Default master catalog.
 CATALOG_PATH = (
     ROOT
     / "data_dictionary_final_v2 (1)(2).xlsx"
@@ -45,11 +45,10 @@ def is_api_dataset(
     dataset: dict[str, Any],
 ) -> bool:
     """
-    Determine whether a catalog entry represents an API
-    source.
+    Determine whether a catalog entry represents an API source.
 
-    This intentionally uses the catalog metadata rather than
-    guessing from the URL alone.
+    The catalog metadata is checked first. URL patterns are used
+    only as additional API indicators.
     """
 
     source = str(
@@ -105,13 +104,16 @@ def is_api_dataset(
 
 
 # ==============================================================
-# OUTPUT CHECK
+# OUTPUT
 # ==============================================================
 
 
 def output_path(
     dataset_id: str,
 ) -> Path:
+    """
+    Return the expected CSV path for a dataset.
+    """
 
     return (
         ROOT
@@ -131,8 +133,8 @@ def select_datasets(
     limit: int,
 ) -> list[dict[str, Any]]:
     """
-    Convert catalog definitions to agent dictionaries and
-    select the first eligible non-API datasets.
+    Convert catalog definitions to agent dictionaries and select
+    the first eligible non-API datasets.
 
     API datasets are skipped before the limit is applied.
     """
@@ -175,6 +177,12 @@ def run_one_dataset(
     agent: GenericExtractionAgent,
     dataset: dict[str, Any],
 ) -> dict[str, Any]:
+    """
+    Run one dataset through the generic autonomous agent.
+
+    The agent instance is supplied by the caller so the same model
+    can be reused across multiple datasets.
+    """
 
     dataset_id = dataset[
         "dataset_id"
@@ -214,7 +222,7 @@ def run_one_dataset(
     )
 
     # ----------------------------------------------------------
-    # CHECK WHETHER THIS DATASET IS ALREADY CURRENT
+    # CHECK WHETHER DATASET IS ALREADY CURRENT
     # ----------------------------------------------------------
 
     if previous_state:
@@ -335,6 +343,7 @@ def run_one_dataset(
             "message": str(
                 exc
             ),
+            "traceback": traceback_text,
         }
 
     # ----------------------------------------------------------
@@ -479,7 +488,277 @@ def run_one_dataset(
 
 
 # ==============================================================
-# MAIN
+# IN-PROCESS GENERIC RUNNER
+# ==============================================================
+
+
+def run_datasets(
+    agent: GenericExtractionAgent,
+    limit: int = 5,
+    catalog_path: str | Path = CATALOG_PATH,
+) -> list[dict[str, Any]]:
+    """
+    Run the generic extraction pipeline in-process.
+
+    The Qwen model is supplied through the already-created agent.
+
+    This is the preferred entry point for Colab because the model
+    is loaded exactly once and reused across every dataset.
+    """
+
+    catalog_path = Path(
+        catalog_path
+    )
+
+    if limit <= 0:
+        raise ValueError(
+            "limit must be greater than zero."
+        )
+
+    print(
+        "=" * 75
+    )
+
+    print(
+        "GENERIC AUTONOMOUS EXTRACTION RUNNER"
+    )
+
+    print(
+        "=" * 75
+    )
+
+    print(
+        f"Catalog: {catalog_path}"
+    )
+
+    print(
+        f"Requested datasets: {limit}"
+    )
+
+    # ----------------------------------------------------------
+    # LOAD CATALOG
+    # ----------------------------------------------------------
+
+    print(
+        "\n[1/4] Loading master catalog..."
+    )
+
+    definitions = load_catalog(
+        catalog_path
+    )
+
+    print(
+        f"Catalog datasets loaded: "
+        f"{len(definitions)}"
+    )
+
+    # ----------------------------------------------------------
+    # SELECT NON-API DATASETS
+    # ----------------------------------------------------------
+
+    print(
+        "\n[2/4] Selecting non-API datasets..."
+    )
+
+    datasets = select_datasets(
+        definitions,
+        limit,
+    )
+
+    print(
+        f"Selected: {len(datasets)}"
+    )
+
+    if not datasets:
+
+        print(
+            "No eligible non-API datasets found."
+        )
+
+        return []
+
+    for index, dataset in enumerate(
+        datasets,
+        start=1,
+    ):
+
+        print(
+            f"{index}. "
+            f"{dataset['data_title']}"
+        )
+
+    # ----------------------------------------------------------
+    # PROCESS DATASETS
+    # ----------------------------------------------------------
+
+    print(
+        "\n[3/4] Processing datasets..."
+    )
+
+    results: list[
+        dict[str, Any]
+    ] = []
+
+    for index, dataset in enumerate(
+        datasets,
+        start=1,
+    ):
+
+        print()
+        print(
+            "#" * 75
+        )
+
+        print(
+            f"PROCESSING "
+            f"{index}/{len(datasets)}"
+        )
+
+        print(
+            "#" * 75
+        )
+
+        try:
+
+            result = run_one_dataset(
+                agent,
+                dataset,
+            )
+
+        except Exception as exc:
+
+            result = {
+                "success": False,
+                "status": "failed",
+                "dataset_id": dataset[
+                    "dataset_id"
+                ],
+                "error_type": type(
+                    exc
+                ).__name__,
+                "message": str(
+                    exc
+                ),
+                "traceback": traceback.format_exc(),
+            }
+
+        results.append(
+            result
+        )
+
+        # ------------------------------------------------------
+        # One dataset failure must NOT stop the entire run.
+        # ------------------------------------------------------
+
+        if result.get(
+            "success",
+            False,
+        ):
+
+            print(
+                "\nDataset completed."
+            )
+
+        else:
+
+            print(
+                "\nDataset failed."
+            )
+
+            print(
+                json.dumps(
+                    result,
+                    indent=2,
+                    ensure_ascii=False,
+                    default=str,
+                )
+            )
+
+    # ----------------------------------------------------------
+    # SUMMARY
+    # ----------------------------------------------------------
+
+    print(
+        "\n[4/4] Run summary..."
+    )
+
+    successful = sum(
+        1
+        for result in results
+        if result.get(
+            "success",
+            False,
+        )
+    )
+
+    failed = (
+        len(results)
+        - successful
+    )
+
+    unchanged = sum(
+        1
+        for result in results
+        if result.get(
+            "status"
+        ) == "unchanged"
+    )
+
+    regenerated = sum(
+        1
+        for result in results
+        if result.get(
+            "status"
+        ) == "regenerated"
+    )
+
+    print()
+    print(
+        "=" * 75
+    )
+
+    print(
+        "RUN COMPLETE"
+    )
+
+    print(
+        "=" * 75
+    )
+
+    print(
+        f"Processed:   {len(results)}"
+    )
+
+    print(
+        f"Successful:  {successful}"
+    )
+
+    print(
+        f"Unchanged:   {unchanged}"
+    )
+
+    print(
+        f"Regenerated: {regenerated}"
+    )
+
+    print(
+        f"Failed:      {failed}"
+    )
+
+    print()
+
+    for result in results:
+
+        print(
+            f"{result.get('dataset_id')}: "
+            f"{result.get('status')}"
+        )
+
+    return results
+
+
+# ==============================================================
+# CLI
 # ==============================================================
 
 
@@ -548,216 +827,42 @@ def main() -> int:
     )
 
     # ----------------------------------------------------------
-    # LOAD CATALOG
-    # ----------------------------------------------------------
-
-    print(
-        "\n[1/4] Loading master catalog..."
-    )
-
-    definitions = load_catalog(
-        catalog_path
-    )
-
-    print(
-        f"Catalog datasets loaded: "
-        f"{len(definitions)}"
-    )
-
-    # ----------------------------------------------------------
-    # SELECT NON-API DATASETS
-    # ----------------------------------------------------------
-
-    print(
-        "\n[2/4] Selecting non-API datasets..."
-    )
-
-    datasets = select_datasets(
-        definitions,
-        args.limit,
-    )
-
-    print(
-        f"Selected: {len(datasets)}"
-    )
-
-    if not datasets:
-
-        print(
-            "No eligible non-API datasets found."
-        )
-
-        return 0
-
-    for index, dataset in enumerate(
-        datasets,
-        start=1,
-    ):
-
-        print(
-            f"{index}. "
-            f"{dataset['data_title']}"
-        )
-
-    # ----------------------------------------------------------
     # LOAD QWEN
     # ----------------------------------------------------------
 
     print(
-        "\n[3/4] Loading Qwen..."
+        "\n[1/2] Loading Qwen..."
     )
 
     model = QwenModel(
-        load_in_4bit=False,
-        device_map="cpu",
+        load_in_4bit=True,
+        device_map="auto",
     )
 
-    agent = (
-        GenericExtractionAgent(
-            model
-        )
+    agent = GenericExtractionAgent(
+        model
     )
 
     # ----------------------------------------------------------
-    # PROCESS DATASETS
+    # RUN DATASETS
     # ----------------------------------------------------------
 
     print(
-        "\n[4/4] Processing datasets..."
+        "\n[2/2] Running datasets..."
     )
 
-    results: list[
-        dict[str, Any]
-    ] = []
-
-    for index, dataset in enumerate(
-        datasets,
-        start=1,
-    ):
-
-        print()
-        print(
-            "#" * 75
-        )
-
-        print(
-            f"PROCESSING "
-            f"{index}/{len(datasets)}"
-        )
-
-        print(
-            "#" * 75
-        )
-
-        try:
-
-            result = run_one_dataset(
-                agent,
-                dataset,
-            )
-
-        except Exception as exc:
-
-            result = {
-                "success": False,
-                "status": "failed",
-                "dataset_id": dataset[
-                    "dataset_id"
-                ],
-                "error_type": type(
-                    exc
-                ).__name__,
-                "message": str(
-                    exc
-                ),
-            }
-
-        results.append(
-            result
-        )
-
-        # ------------------------------------------------------
-        # IMPORTANT:
-        # One dataset failure must NOT stop the entire run.
-        # ------------------------------------------------------
-
-        if result.get(
-            "success",
-            False,
-        ):
-
-            print(
-                "\nDataset completed."
-            )
-
-        else:
-
-            print(
-                "\nDataset failed."
-            )
-
-            print(
-                json.dumps(
-                    result,
-                    indent=2,
-                    ensure_ascii=False,
-                    default=str,
-                )
-            )
-
-    # ----------------------------------------------------------
-    # SUMMARY
-    # ----------------------------------------------------------
-
-    successful = sum(
-        1
-        for result in results
-        if result.get(
-            "success",
-            False,
-        )
+    run_datasets(
+        agent=agent,
+        limit=args.limit,
+        catalog_path=catalog_path,
     )
-
-    failed = (
-        len(results)
-        - successful
-    )
-
-    print()
-    print(
-        "=" * 75
-    )
-
-    print(
-        "RUN COMPLETE"
-    )
-
-    print(
-        "=" * 75
-    )
-
-    print(
-        f"Processed: {len(results)}"
-    )
-
-    print(
-        f"Successful: {successful}"
-    )
-
-    print(
-        f"Failed: {failed}"
-    )
-
-    print()
-
-    for result in results:
-
-        print(
-            f"{result.get('dataset_id')}: "
-            f"{result.get('status')}"
-        )
 
     return 0
+
+
+# ==============================================================
+# ENTRY POINT
+# ==============================================================
 
 
 if __name__ == "__main__":
