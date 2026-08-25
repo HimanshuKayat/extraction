@@ -24,8 +24,9 @@ class GenericExtractionAgent:
     """
     Generic autonomous extraction agent.
 
-    The agent receives ONE dataset definition from the
-    master catalog and autonomously decides how to:
+    One agent can process any dataset definition.
+
+    The agent autonomously decides how to:
 
         1. Find the requested dataset.
         2. Navigate the source website.
@@ -35,13 +36,23 @@ class GenericExtractionAgent:
         6. Validate the extracted data.
         7. Submit the final structured dataset.
 
-    The agent can only use tools explicitly registered
-    in the controlled ToolRegistry.
-
     No dataset-specific run.py or parse.py is required.
     """
 
-    MAX_STEPS = 20
+    # ----------------------------------------------------------
+    # T4-safe limits
+    # ----------------------------------------------------------
+
+    MAX_STEPS = 12
+
+    # Maximum number of previous messages retained.
+    #
+    # We keep the initial system/user messages plus only the
+    # most recent tool interaction history.
+    MAX_HISTORY_MESSAGES = 8
+
+    # Maximum characters returned to the model from one tool.
+    MAX_TOOL_RESULT_CHARS = 12000
 
     def __init__(
         self,
@@ -64,105 +75,71 @@ class GenericExtractionAgent:
     ) -> list[dict[str, str]]:
         """
         Build the initial Qwen conversation.
+
+        The prompt is intentionally compact because the model is
+        running on a 14.56 GB Tesla T4.
         """
 
         tools = json.dumps(
             self.registry.to_prompt_list(),
-            indent=2,
             ensure_ascii=False,
+            separators=(
+                ",",
+                ":",
+            ),
         )
 
         dataset_json = json.dumps(
             dataset,
-            indent=2,
             ensure_ascii=False,
+            separators=(
+                ",",
+                ":",
+            ),
         )
 
         system_prompt = """
 You are an autonomous data extraction agent.
 
-Your task is to extract ONE specific dataset from
-an official or authoritative source.
+Extract ONE requested dataset from an official or
+authoritative source.
 
-You have access ONLY to the registered tools provided
-in the prompt.
+You have access ONLY to the registered tools.
 
-You must autonomously determine how to obtain and
-extract the requested dataset.
-
-========================================================
-CORE OBJECTIVE
-========================================================
-
-Extract the actual requested dataset.
-
-Do NOT merely find the webpage.
-
-Do NOT merely download a file.
-
-Do NOT return a description of the dataset.
-
-The final result must contain actual structured data.
+Your objective is actual structured data, not merely
+a webpage description or a downloaded file.
 
 ========================================================
-SOURCE NAVIGATION
+ACQUISITION
 ========================================================
 
-Start from the supplied data_link.
+Start from data_link.
 
-The URL may be:
+Possible source types include:
 
-- a direct file
-- a webpage
-- a dynamic website
-- a page containing links to files
-- a page containing multiple datasets
-- a JavaScript application
+- direct downloadable file
+- normal webpage
+- dynamic JavaScript website
+- page containing download links
+- page containing multiple datasets
 
-Determine which situation applies.
+Prefer:
 
-Use:
+1. http_download for a direct file.
+2. browser_open/browser_inspect for websites.
+3. Use browser navigation to discover the actual
+   downloadable resource when direct HTTP fails.
 
-browser_open
-browser_inspect
-
-when website navigation is required.
-
-Use:
-
-http_download
-
-when a direct downloadable artifact is available.
+Do not repeatedly retry the same failed method.
 
 ========================================================
-DOWNLOAD STRATEGY
+FILE EXTRACTION
 ========================================================
 
-Prefer direct downloads when possible.
+After downloading a file:
 
-If direct HTTP downloading fails:
-
-1. Use browser_open.
-2. Inspect the page.
-3. Identify the actual data resource.
-4. Follow the appropriate link.
-5. Download the underlying resource.
-
-Do not repeatedly retry a failed HTTP request
-without changing strategy.
-
-========================================================
-FILE INSPECTION
-========================================================
-
-After obtaining a file, ALWAYS inspect it before
-deciding how to extract it.
-
-Use:
-
-inspect_file
-
-Then choose the appropriate extraction tool.
+1. inspect_file
+2. choose the appropriate reader
 
 PDF:
     read_pdf
@@ -174,15 +151,17 @@ CSV:
 Excel:
     read_excel
 
-Do not assume the file type from its filename alone.
+Extract ACTUAL records.
+
+Preserve source values.
+
+Never invent records, columns, URLs, or values.
 
 ========================================================
-DATASET SELECTION
+DATASET MATCHING
 ========================================================
 
-The source may contain multiple datasets.
-
-Use the supplied:
+Use the supplied dataset definition:
 
 data_title
 data_description
@@ -190,28 +169,7 @@ data_scope
 granularity
 time_granularity
 
-to determine which data belongs to the requested
-dataset.
-
-Do not extract unrelated datasets simply because
-they appear on the same page or file.
-
-========================================================
-EXTRACTION
-========================================================
-
-Extract the actual records.
-
-Preserve the source values.
-
-Do not invent missing values.
-
-Do not fabricate columns.
-
-Do not silently replace source values with guesses.
-
-If a value is genuinely unavailable, preserve it
-as empty/null where appropriate.
+Only extract records belonging to the requested dataset.
 
 ========================================================
 VALIDATION
@@ -219,40 +177,31 @@ VALIDATION
 
 Before submission:
 
-1. Check that records were actually extracted.
-2. Check required fields where identifiable.
-3. Check that the row structure is consistent.
-4. Check for obvious extraction corruption.
-5. Use the validation tools when appropriate.
+- confirm records exist
+- check row consistency
+- check relevant required fields
+- check obvious extraction corruption
 
 Do not submit an empty dataset.
-
-Do not submit a dataset merely because a webpage
-returned HTTP 200.
 
 ========================================================
 SUBMISSION
 ========================================================
 
-When extraction is complete, use:
+When the requested records have been extracted and
+validated, call:
 
 submit_dataset
 
-The rows must contain actual extracted records.
-
-The final submission should contain:
+The submission should contain:
 
 rows
 columns
 confidence
 notes
 
-Use confidence to indicate how confident you are
-that the extracted records correspond to the requested
-dataset.
-
 ========================================================
-IMPORTANT RESTRICTIONS
+RESTRICTIONS
 ========================================================
 
 Never:
@@ -260,12 +209,10 @@ Never:
 - execute arbitrary Python
 - execute shell commands
 - access arbitrary filesystem paths
-- invent data
+- fabricate data
 - fabricate URLs
 - fabricate records
 - submit unrelated data
-- stop after discovering only a webpage
-- stop after downloading a file without extracting it
 
 Only use registered tools.
 
@@ -273,42 +220,38 @@ Only use registered tools.
 ACTION FORMAT
 ========================================================
 
-Return exactly ONE JSON action at a time.
-
-Format:
+Return exactly ONE JSON action.
 
 {
   "action": "tool_name",
   "arguments": {}
 }
 
-Do not return explanations outside the JSON action.
+Do not return explanations outside JSON.
 
-When the dataset is successfully extracted:
+When complete:
 
 {
   "action": "submit_dataset",
   "arguments": {
-    "rows": [...],
-    "columns": [...],
+    "rows": [],
+    "columns": [],
     "confidence": 0.0,
-    "notes": "..."
+    "notes": ""
   }
 }
 """
 
         user_prompt = f"""
-Extract the following dataset.
+Extract this dataset:
 
-DATASET DEFINITION:
-
+DATASET:
 {dataset_json}
 
 AVAILABLE TOOLS:
-
 {tools}
 
-Begin by determining the best acquisition strategy.
+Start with the best acquisition strategy.
 
 Return exactly one JSON action.
 """
@@ -325,6 +268,140 @@ Return exactly one JSON action.
         ]
 
     # ==========================================================
+    # COMPACT JSON
+    # ==========================================================
+
+    def _compact_json(
+        self,
+        value: Any,
+    ) -> str:
+        """
+        Serialize tool/model data compactly.
+        """
+
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            separators=(
+                ",",
+                ":",
+            ),
+            default=str,
+        )
+
+    # ==========================================================
+    # LIMIT TOOL RESULT
+    # ==========================================================
+
+    def _compact_tool_result(
+        self,
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Prevent very large browser/file results from filling the
+        model context.
+
+        Important information is preserved where possible.
+        """
+
+        serialized = self._compact_json(
+            result
+        )
+
+        if len(serialized) <= (
+            self.MAX_TOOL_RESULT_CHARS
+        ):
+            return result
+
+        # ------------------------------------------------------
+        # Preserve structure but truncate very large fields.
+        # ------------------------------------------------------
+
+        compact = dict(
+            result
+        )
+
+        for key in (
+            "text",
+            "content",
+            "body",
+            "html",
+            "stdout",
+            "stderr",
+            "data",
+            "rows",
+            "records",
+        ):
+
+            if key not in compact:
+                continue
+
+            value = compact[
+                key
+            ]
+
+            if isinstance(
+                value,
+                str,
+            ):
+
+                compact[
+                    key
+                ] = (
+                    value[
+                        : self.MAX_TOOL_RESULT_CHARS
+                    ]
+                    + "\n...[TRUNCATED]..."
+                )
+
+            elif isinstance(
+                value,
+                list,
+            ):
+
+                # Keep the beginning of long lists.
+                compact[
+                    key
+                ] = value[:100]
+
+                compact[
+                    f"{key}_truncated"
+                ] = True
+
+        # Final safety truncation.
+        serialized = self._compact_json(
+            compact
+        )
+
+        if len(serialized) > (
+            self.MAX_TOOL_RESULT_CHARS
+        ):
+
+            return {
+                "success": result.get(
+                    "success",
+                    False,
+                ),
+                "status": result.get(
+                    "status"
+                ),
+                "message": result.get(
+                    "message"
+                ),
+                "error_type": result.get(
+                    "error_type"
+                ),
+                "summary": (
+                    serialized[
+                        : self.MAX_TOOL_RESULT_CHARS
+                    ]
+                    + "\n...[TRUNCATED]..."
+                ),
+            }
+
+        return compact
+
+    # ==========================================================
     # ACTION PARSER
     # ==========================================================
 
@@ -336,25 +413,22 @@ Return exactly one JSON action.
         Parse Qwen's JSON action.
 
         Handles:
-            plain JSON
-            ```json blocks
-            surrounding text
+
+        - plain JSON
+        - markdown JSON blocks
+        - surrounding text
         """
 
         if not isinstance(
             response,
             str,
         ):
+
             raise ValueError(
                 "Qwen response must be a string."
             )
 
         response = response.strip()
-
-        # ------------------------------------------------------
-        # Remove HTML escaping occasionally produced by
-        # notebook/display environments.
-        # ------------------------------------------------------
 
         response = (
             response
@@ -372,10 +446,6 @@ Return exactly one JSON action.
             )
         )
 
-        # ------------------------------------------------------
-        # Remove markdown fences.
-        # ------------------------------------------------------
-
         response = re.sub(
             r"```json",
             "",
@@ -391,10 +461,6 @@ Return exactly one JSON action.
 
         response = response.strip()
 
-        # ------------------------------------------------------
-        # Locate JSON object.
-        # ------------------------------------------------------
-
         start = response.find(
             "{"
         )
@@ -404,6 +470,7 @@ Return exactly one JSON action.
         )
 
         if start == -1 or end == -1:
+
             raise ValueError(
                 "Qwen did not return a JSON object."
             )
@@ -434,10 +501,6 @@ Return exactly one JSON action.
                 "Qwen action must be a JSON object."
             )
 
-        # ------------------------------------------------------
-        # Required action field.
-        # ------------------------------------------------------
-
         action_name = action.get(
             "action"
         )
@@ -451,14 +514,6 @@ Return exactly one JSON action.
                 "Qwen action is missing a valid "
                 "'action' field."
             )
-
-        action[
-            "action"
-        ] = action_name.strip()
-
-        # ------------------------------------------------------
-        # Arguments.
-        # ------------------------------------------------------
 
         arguments = action.get(
             "arguments",
@@ -477,14 +532,13 @@ Return exactly one JSON action.
                 "Qwen 'arguments' must be a JSON object."
             )
 
-        action[
-            "arguments"
-        ] = arguments
-
-        return action
+        return {
+            "action": action_name.strip(),
+            "arguments": arguments,
+        }
 
     # ==========================================================
-    # TOOL RESULT → MODEL MESSAGE
+    # TOOL RESULT MESSAGE
     # ==========================================================
 
     def _tool_result_message(
@@ -497,12 +551,16 @@ Return exactly one JSON action.
         message.
         """
 
+        compact_result = (
+            self._compact_tool_result(
+                result
+            )
+        )
+
         return (
             "TOOL EXECUTION RESULT:\n"
-            + json.dumps(
-                result,
-                ensure_ascii=False,
-                default=str,
+            + self._compact_json(
+                compact_result
             )
             + "\n\n"
             "Continue the extraction.\n"
@@ -510,16 +568,48 @@ Return exactly one JSON action.
         )
 
     # ==========================================================
-    # INTERNAL AGENT LOOP
+    # MESSAGE COMPACTION
+    # ==========================================================
+
+    def _compact_messages(
+        self,
+        messages: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        """
+        Keep the initial instructions plus the most recent
+        interactions.
+
+        This is the main context protection mechanism for the T4.
+        """
+
+        if len(messages) <= (
+            self.MAX_HISTORY_MESSAGES
+        ):
+
+            return messages
+
+        first_two = messages[:2]
+
+        recent = messages[
+            -(
+                self.MAX_HISTORY_MESSAGES
+                - 2
+            ):
+        ]
+
+        return (
+            first_two
+            + recent
+        )
+
+    # ==========================================================
+    # INTERNAL LOOP
     # ==========================================================
 
     def _run(
         self,
         dataset: dict[str, Any],
     ) -> dict[str, Any]:
-        """
-        Execute the autonomous extraction loop.
-        """
 
         messages = self._build_prompt(
             dataset
@@ -549,13 +639,46 @@ Return exactly one JSON action.
             )
 
             # --------------------------------------------------
+            # Keep context bounded before every model call.
+            # --------------------------------------------------
+
+            messages = (
+                self._compact_messages(
+                    messages
+                )
+            )
+
+            # --------------------------------------------------
             # ASK QWEN
             # --------------------------------------------------
 
-            response = self.model.generate(
-                messages,
-                mode="tool_selection",
-            )
+            try:
+
+                response = (
+                    self.model.generate(
+                        messages,
+                        mode="tool_selection",
+                    )
+                )
+
+            except Exception as exc:
+
+                # ------------------------------------------------
+                # Don't allow a model failure to silently become
+                # a successful dataset.
+                # ------------------------------------------------
+
+                return {
+                    "success": False,
+                    "status": "failed",
+                    "error_type": type(
+                        exc
+                    ).__name__,
+                    "message": str(
+                        exc
+                    ),
+                    "history": history,
+                }
 
             print(
                 "\nRAW QWEN RESPONSE:"
@@ -566,7 +689,7 @@ Return exactly one JSON action.
             )
 
             # --------------------------------------------------
-            # PARSE ACTION
+            # PARSE
             # --------------------------------------------------
 
             try:
@@ -586,6 +709,7 @@ Return exactly one JSON action.
                     "message": str(
                         exc
                     ),
+                    "raw_response": response,
                     "history": history,
                 }
 
@@ -649,14 +773,24 @@ Return exactly one JSON action.
 
                 result = {
                     "success": False,
-                    "error_type": (
-                        type(exc).__name__
-                    ),
+                    "error_type": type(
+                        exc
+                    ).__name__,
                     "message": str(
                         exc
                     ),
                     "recoverable": True,
                 }
+
+            # --------------------------------------------------
+            # Compact the result before storing it.
+            # --------------------------------------------------
+
+            result_for_model = (
+                self._compact_tool_result(
+                    result
+                )
+            )
 
             print(
                 "\nTOOL RESULT:"
@@ -664,7 +798,7 @@ Return exactly one JSON action.
 
             print(
                 json.dumps(
-                    result,
+                    result_for_model,
                     indent=2,
                     ensure_ascii=False,
                     default=str,
@@ -672,19 +806,19 @@ Return exactly one JSON action.
             )
 
             # --------------------------------------------------
-            # RECORD HISTORY
+            # HISTORY
             # --------------------------------------------------
 
             history.append(
                 {
                     "step": step,
                     "action": action,
-                    "result": result,
+                    "result": result_for_model,
                 }
             )
 
             # --------------------------------------------------
-            # FINAL DATASET SUBMISSION
+            # SUBMISSION
             # --------------------------------------------------
 
             if (
@@ -710,26 +844,21 @@ Return exactly one JSON action.
                         "history": history,
                     }
 
-                # Submission failed.
-                # Give the failure back to Qwen so it
-                # can attempt recovery.
-
             # --------------------------------------------------
-            # ADD MODEL ACTION TO HISTORY
+            # Add model action.
             # --------------------------------------------------
 
             messages.append(
                 {
                     "role": "assistant",
-                    "content": json.dumps(
-                        action,
-                        ensure_ascii=False,
+                    "content": self._compact_json(
+                        action
                     ),
                 }
             )
 
             # --------------------------------------------------
-            # ADD TOOL RESULT
+            # Add compact tool result.
             # --------------------------------------------------
 
             messages.append(
@@ -738,15 +867,11 @@ Return exactly one JSON action.
                     "content": (
                         self._tool_result_message(
                             action,
-                            result,
+                            result_for_model,
                         )
                     ),
                 }
             )
-
-        # ------------------------------------------------------
-        # MAXIMUM STEPS
-        # ------------------------------------------------------
 
         return {
             "success": False,
@@ -761,7 +886,7 @@ Return exactly one JSON action.
         }
 
     # ==========================================================
-    # PUBLIC RUN METHOD
+    # PUBLIC
     # ==========================================================
 
     def run(
@@ -769,13 +894,7 @@ Return exactly one JSON action.
         dataset: dict[str, Any],
     ) -> dict[str, Any]:
         """
-        Run one dataset extraction with an isolated
-        submission context.
-
-        The submission tool does not receive the dataset
-        ID from Qwen. Instead, the runner establishes it
-        here so Qwen cannot write into another dataset's
-        output directory.
+        Run one dataset with an isolated submission context.
         """
 
         dataset_id = dataset.get(
