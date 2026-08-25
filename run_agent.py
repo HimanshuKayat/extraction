@@ -10,16 +10,15 @@ from typing import Any
 from agent.catalog import load_catalog
 from agent.fingerprint import fingerprint_dataset
 from agent.generic_agent import GenericExtractionAgent
+from agent.model import QwenModel
 from agent.state import (
     get_dataset_state,
     update_dataset_state,
 )
-from agent.model import QwenModel
 
 
 ROOT = Path(__file__).resolve().parent
 
-# Default master catalog.
 CATALOG_PATH = (
     ROOT
     / "data_dictionary_final_v2 (1)(2).xlsx"
@@ -45,10 +44,12 @@ def is_api_dataset(
     dataset: dict[str, Any],
 ) -> bool:
     """
-    Determine whether a catalog entry represents an API source.
+    Determine whether a dataset should be treated as an API
+    source.
 
-    The catalog metadata is checked first. URL patterns are used
-    only as additional API indicators.
+    This is only the current catalog-level API filter.
+    Deeper website/backend detection will be handled by the
+    autonomous agent itself.
     """
 
     source = str(
@@ -80,12 +81,10 @@ def is_api_dataset(
         ]
     )
 
-    # Explicit API indicators.
     for term in API_TERMS:
         if term in combined:
             return True
 
-    # Common API URL patterns.
     api_patterns = [
         r"/api/",
         r"/api$",
@@ -104,6 +103,86 @@ def is_api_dataset(
 
 
 # ==============================================================
+# DATASET ID
+# ==============================================================
+
+
+def make_dataset_id(
+    definition: Any,
+    dataset: dict[str, Any],
+) -> str | None:
+    """
+    Resolve a stable dataset ID.
+
+    Different catalog-definition implementations may expose the
+    identifier under different names, so this function provides
+    one central resolution point.
+    """
+
+    # ----------------------------------------------------------
+    # First: context dictionary
+    # ----------------------------------------------------------
+
+    value = dataset.get(
+        "dataset_id"
+    )
+
+    if value:
+        return str(value)
+
+    value = dataset.get(
+        "id"
+    )
+
+    if value:
+        return str(value)
+
+    # ----------------------------------------------------------
+    # Second: catalog definition attributes
+    # ----------------------------------------------------------
+
+    for attribute in (
+        "dataset_id",
+        "id",
+        "name",
+        "key",
+    ):
+
+        value = getattr(
+            definition,
+            attribute,
+            None,
+        )
+
+        if value:
+            return str(value)
+
+    # ----------------------------------------------------------
+    # Third: generate a stable ID from the title
+    # ----------------------------------------------------------
+
+    title = str(
+        dataset.get(
+            "data_title",
+            "",
+        )
+    ).strip()
+
+    if title:
+
+        generated = re.sub(
+            r"[^a-z0-9]+",
+            "_",
+            title.lower(),
+        ).strip("_")
+
+        if generated:
+            return generated
+
+    return None
+
+
+# ==============================================================
 # OUTPUT
 # ==============================================================
 
@@ -111,9 +190,6 @@ def is_api_dataset(
 def output_path(
     dataset_id: str,
 ) -> Path:
-    """
-    Return the expected CSV path for a dataset.
-    """
 
     return (
         ROOT
@@ -133,10 +209,12 @@ def select_datasets(
     limit: int,
 ) -> list[dict[str, Any]]:
     """
-    Convert catalog definitions to agent dictionaries and select
-    the first eligible non-API datasets.
+    Convert catalog definitions into agent contexts.
 
-    API datasets are skipped before the limit is applied.
+    API datasets are skipped before the requested limit is
+    applied.
+
+    Every selected dataset is guaranteed to contain dataset_id.
     """
 
     selected: list[
@@ -149,13 +227,41 @@ def select_datasets(
             definition.to_agent_context()
         )
 
+        # ------------------------------------------------------
+        # Resolve dataset ID.
+        # ------------------------------------------------------
+
+        dataset_id = make_dataset_id(
+            definition,
+            dataset,
+        )
+
+        if not dataset_id:
+
+            print(
+                "[SKIP] Dataset has no usable ID: "
+                f"{dataset.get('data_title', 'UNKNOWN')}"
+            )
+
+            continue
+
+        dataset[
+            "dataset_id"
+        ] = dataset_id
+
+        # ------------------------------------------------------
+        # API FILTER
+        # ------------------------------------------------------
+
         if is_api_dataset(
             dataset
         ):
+
             print(
                 f"[SKIP API] "
-                f"{dataset['data_title']}"
+                f"{dataset.get('data_title', 'UNKNOWN')}"
             )
+
             continue
 
         selected.append(
@@ -178,42 +284,69 @@ def run_one_dataset(
     dataset: dict[str, Any],
 ) -> dict[str, Any]:
     """
-    Run one dataset through the generic autonomous agent.
-
-    The agent instance is supplied by the caller so the same model
-    can be reused across multiple datasets.
+    Run one dataset using the already-loaded generic agent.
     """
 
-    dataset_id = dataset[
+    dataset_id = dataset.get(
         "dataset_id"
-    ]
+    )
 
-    title = dataset[
-        "data_title"
-    ]
+    if not dataset_id:
+
+        return {
+            "success": False,
+            "status": "failed",
+            "dataset_id": "unknown",
+            "message": (
+                "Dataset does not contain "
+                "a dataset_id."
+            ),
+        }
+
+    title = dataset.get(
+        "data_title",
+        dataset_id,
+    )
+
+    data_link = dataset.get(
+        "data_link",
+        "",
+    )
 
     print()
     print(
         "=" * 75
     )
+
     print(
         f"DATASET: {title}"
     )
+
     print(
         f"ID:      {dataset_id}"
     )
+
     print(
-        f"URL:     {dataset['data_link']}"
+        f"URL:     {data_link}"
     )
+
     print(
         "=" * 75
     )
+
+    # ----------------------------------------------------------
+    # FINGERPRINT
+    # ----------------------------------------------------------
 
     catalog_fingerprint = (
         fingerprint_dataset(
             dataset
         )
     )
+
+    # ----------------------------------------------------------
+    # PREVIOUS STATE
+    # ----------------------------------------------------------
 
     previous_state = (
         get_dataset_state(
@@ -222,7 +355,7 @@ def run_one_dataset(
     )
 
     # ----------------------------------------------------------
-    # CHECK WHETHER DATASET IS ALREADY CURRENT
+    # CHANGE / OUTPUT GATE
     # ----------------------------------------------------------
 
     if previous_state:
@@ -287,13 +420,11 @@ def run_one_dataset(
             catalog_fingerprint
         ),
         data_title=title,
-        data_link=dataset[
-            "data_link"
-        ],
+        data_link=data_link,
     )
 
     # ----------------------------------------------------------
-    # START AGENT
+    # AGENT
     # ----------------------------------------------------------
 
     print(
@@ -372,7 +503,7 @@ def run_one_dataset(
         }
 
     # ----------------------------------------------------------
-    # VERIFY OUTPUT
+    # OUTPUT
     # ----------------------------------------------------------
 
     submission = result.get(
@@ -380,16 +511,18 @@ def run_one_dataset(
         {},
     )
 
-    csv_path = (
-        submission.get(
+    if isinstance(
+        submission,
+        dict,
+    ):
+
+        csv_path = submission.get(
             "path"
         )
-        if isinstance(
-            submission,
-            dict,
-        )
-        else None
-    )
+
+    else:
+
+        csv_path = None
 
     if csv_path:
 
@@ -402,6 +535,10 @@ def run_one_dataset(
         csv_file = output_path(
             dataset_id
         )
+
+    # ----------------------------------------------------------
+    # VERIFY CSV
+    # ----------------------------------------------------------
 
     if not csv_file.exists():
 
@@ -428,30 +565,30 @@ def run_one_dataset(
         }
 
     # ----------------------------------------------------------
-    # SUCCESS
+    # METADATA
     # ----------------------------------------------------------
 
-    rows = (
-        submission.get(
+    if isinstance(
+        submission,
+        dict,
+    ):
+
+        rows = submission.get(
             "rows"
         )
-        if isinstance(
-            submission,
-            dict,
-        )
-        else None
-    )
 
-    columns = (
-        submission.get(
+        columns = submission.get(
             "columns"
         )
-        if isinstance(
-            submission,
-            dict,
-        )
-        else None
-    )
+
+    else:
+
+        rows = None
+        columns = None
+
+    # ----------------------------------------------------------
+    # SUCCESS
+    # ----------------------------------------------------------
 
     update_dataset_state(
         dataset_id,
@@ -488,7 +625,7 @@ def run_one_dataset(
 
 
 # ==============================================================
-# IN-PROCESS GENERIC RUNNER
+# IN-PROCESS RUNNER
 # ==============================================================
 
 
@@ -498,22 +635,22 @@ def run_datasets(
     catalog_path: str | Path = CATALOG_PATH,
 ) -> list[dict[str, Any]]:
     """
-    Run the generic extraction pipeline in-process.
+    Run multiple datasets using ONE already-loaded agent.
 
-    The Qwen model is supplied through the already-created agent.
+    This is the preferred Colab entry point.
 
-    This is the preferred entry point for Colab because the model
-    is loaded exactly once and reused across every dataset.
+    Qwen is NOT loaded here.
     """
+
+    if limit <= 0:
+
+        raise ValueError(
+            "limit must be greater than zero."
+        )
 
     catalog_path = Path(
         catalog_path
     )
-
-    if limit <= 0:
-        raise ValueError(
-            "limit must be greater than zero."
-        )
 
     print(
         "=" * 75
@@ -553,7 +690,7 @@ def run_datasets(
     )
 
     # ----------------------------------------------------------
-    # SELECT NON-API DATASETS
+    # SELECT
     # ----------------------------------------------------------
 
     print(
@@ -584,11 +721,11 @@ def run_datasets(
 
         print(
             f"{index}. "
-            f"{dataset['data_title']}"
+            f"{dataset.get('data_title', 'UNKNOWN')}"
         )
 
     # ----------------------------------------------------------
-    # PROCESS DATASETS
+    # PROCESS
     # ----------------------------------------------------------
 
     print(
@@ -627,12 +764,15 @@ def run_datasets(
 
         except Exception as exc:
 
+            dataset_id = dataset.get(
+                "dataset_id",
+                "unknown",
+            )
+
             result = {
                 "success": False,
                 "status": "failed",
-                "dataset_id": dataset[
-                    "dataset_id"
-                ],
+                "dataset_id": dataset_id,
                 "error_type": type(
                     exc
                 ).__name__,
@@ -645,10 +785,6 @@ def run_datasets(
         results.append(
             result
         )
-
-        # ------------------------------------------------------
-        # One dataset failure must NOT stop the entire run.
-        # ------------------------------------------------------
 
         if result.get(
             "success",
@@ -691,11 +827,6 @@ def run_datasets(
         )
     )
 
-    failed = (
-        len(results)
-        - successful
-    )
-
     unchanged = sum(
         1
         for result in results
@@ -710,6 +841,14 @@ def run_datasets(
         if result.get(
             "status"
         ) == "regenerated"
+    )
+
+    failed = sum(
+        1
+        for result in results
+        if result.get(
+            "status"
+        ) == "failed"
     )
 
     print()
@@ -750,8 +889,8 @@ def run_datasets(
     for result in results:
 
         print(
-            f"{result.get('dataset_id')}: "
-            f"{result.get('status')}"
+            f"{result.get('dataset_id', 'unknown')}: "
+            f"{result.get('status', 'unknown')}"
         )
 
     return results
@@ -777,8 +916,7 @@ def main() -> int:
         default=5,
         help=(
             "Number of eligible non-API "
-            "datasets to process. "
-            "Default: 5"
+            "datasets to process."
         ),
     )
 
@@ -827,7 +965,7 @@ def main() -> int:
     )
 
     # ----------------------------------------------------------
-    # LOAD QWEN
+    # LOAD QWEN ONCE
     # ----------------------------------------------------------
 
     print(
@@ -844,11 +982,11 @@ def main() -> int:
     )
 
     # ----------------------------------------------------------
-    # RUN DATASETS
+    # RUN
     # ----------------------------------------------------------
 
     print(
-        "\n[2/2] Running datasets..."
+        "\n[2/2] Processing datasets..."
     )
 
     run_datasets(
