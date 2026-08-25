@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import threading
 import time
 
 from dataclasses import dataclass
@@ -12,6 +13,13 @@ from jsonschema import ValidationError as JsonSchemaValidationError
 
 
 FINISH_ACTION = "finish"
+
+# Maximum time allowed for one asynchronous tool call.
+#
+# Browser tools already have their own internal timeouts, but this
+# prevents a broken async operation from freezing the autonomous
+# agent indefinitely.
+ASYNC_TOOL_TIMEOUT_SECONDS = 60
 
 
 # ==============================================================
@@ -205,55 +213,144 @@ def validate_arguments(
 
 
 # ==============================================================
-# ASYNC EXECUTION
+# ASYNC WORKER
 # ==============================================================
+
+
+def _async_worker(
+    coroutine: Any,
+    result_holder: Dict[str, Any],
+    finished: threading.Event,
+) -> None:
+    """
+    Run one coroutine inside a dedicated thread and event loop.
+
+    This prevents the synchronous agent from trying to nest
+    asyncio.run() inside an already-running Colab/Jupyter loop.
+    """
+
+    async def runner() -> None:
+
+        try:
+
+            result_holder[
+                "result"
+            ] = await coroutine
+
+        except BaseException as exc:
+
+            result_holder[
+                "exception"
+            ] = exc
+
+        finally:
+
+            finished.set()
+
+    try:
+
+        asyncio.run(
+            runner()
+        )
+
+    except BaseException as exc:
+
+        result_holder[
+            "exception"
+        ] = exc
+
+        finished.set()
 
 
 def _run_async_result(
     result: Any,
+    timeout: float = ASYNC_TOOL_TIMEOUT_SECONDS,
 ) -> Any:
     """
-    Execute an awaitable from the synchronous
-    agent interface.
+    Execute an awaitable in a dedicated worker thread.
 
-    If an event loop is already running in the
-    current thread, execution is refused rather
-    than nesting event loops.
+    This function works whether the caller itself is running
+    inside an asyncio event loop or not.
     """
 
-    try:
-
-        asyncio.get_running_loop()
-
-    except RuntimeError:
-
-        return asyncio.run(
-            result
-        )
-
-    # The coroutine has already been created by
-    # the caller. Since we cannot execute it here,
-    # close it to prevent "coroutine was never awaited"
-    # warnings.
-
-    if inspect.iscoroutine(
+    if not inspect.isawaitable(
         result
     ):
 
-        result.close()
+        return result
 
-    raise ToolExecutionError(
-        message=(
-            "An asynchronous tool cannot be "
-            "executed through the synchronous "
-            "agent interface while an event loop "
-            "is already running."
-        ),
-        error_type=(
-            "AsyncExecutionContextError"
-        ),
-        recoverable=False,
+    result_holder: Dict[
+        str,
+        Any,
+    ] = {}
+
+    finished = (
+        threading.Event()
     )
+
+    worker = threading.Thread(
+        target=_async_worker,
+        args=(
+            result,
+            result_holder,
+            finished,
+        ),
+        daemon=True,
+    )
+
+    worker.start()
+
+    completed = finished.wait(
+        timeout=timeout
+    )
+
+    if not completed:
+
+        # We cannot safely kill a Python thread. The worker is
+        # therefore daemonized and the registry returns control
+        # to the agent.
+        raise ToolExecutionError(
+            message=(
+                "Asynchronous tool execution "
+                f"exceeded {timeout:.0f} seconds."
+            ),
+            error_type=(
+                "AsyncToolTimeout"
+            ),
+            recoverable=True,
+        )
+
+    exception = result_holder.get(
+        "exception"
+    )
+
+    if exception is not None:
+
+        if isinstance(
+            exception,
+            ToolRegistryError,
+        ):
+
+            raise exception
+
+        raise ToolExecutionError(
+            message=str(
+                exception
+            ),
+            error_type=type(
+                exception
+            ).__name__,
+            recoverable=True,
+        ) from exception
+
+    return result_holder.get(
+        "result"
+    )
+
+
+# ==============================================================
+# FUNCTION EXECUTION
+# ==============================================================
 
 
 def _execute_function(
@@ -261,8 +358,7 @@ def _execute_function(
     arguments: Dict[str, Any],
 ) -> Any:
     """
-    Execute either a synchronous or asynchronous
-    tool function.
+    Execute either a synchronous or asynchronous tool.
     """
 
     result = function(
@@ -293,8 +389,8 @@ def execute_action(
     """
     Execute exactly one model-selected tool.
 
-    The model can only execute functions that have
-    explicitly been registered in ToolRegistry.
+    The model can only execute functions that have explicitly
+    been registered in ToolRegistry.
     """
 
     # ----------------------------------------------------------
@@ -325,9 +421,15 @@ def execute_action(
     # TOOL LOOKUP
     # ----------------------------------------------------------
 
-    spec = registry.get(
-        action
-    )
+    try:
+
+        spec = registry.get(
+            action
+        )
+
+    except ToolRegistryError:
+
+        raise
 
     # ----------------------------------------------------------
     # ENABLED CHECK
@@ -377,23 +479,9 @@ def execute_action(
             arguments,
         )
 
-    except ToolExecutionError as exc:
+    except ToolRegistryError:
 
-        duration = (
-            time.monotonic()
-            - start
-        )
-
-        return {
-            "success": False,
-            "error_type": exc.error_type,
-            "message": exc.message,
-            "recoverable": exc.recoverable,
-            "duration_seconds": round(
-                duration,
-                4,
-            ),
-        }
+        raise
 
     except Exception as exc:
 
