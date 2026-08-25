@@ -1,0 +1,2 @@
+# Crontab file for scheduling extraction jobs
+# Example: 0 2 * * * /path/to/run_wrapper.sh

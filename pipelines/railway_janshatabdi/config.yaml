@@ -1,0 +1,44 @@
+dataset:
+  id: railway_janshatabdi
+  name: Indian Railways Janshatabdi Express
+
+schedule:
+  frequency: daily
+
+source:
+  type: pdf
+  url: https://indianrailways.gov.in/railwayboard/uploads/directorate/coaching/TAG_2026/Janshatabdi_Exp.pdf
+
+fetch:
+  preferred_method: http
+  fallback_method: browser
+  timeout_seconds: 30
+
+artifact:
+  directory: raw/railway_janshatabdi
+  filename: Janshatabdi_Exp.pdf
+
+target:
+  format: table
+
+  columns:
+    - train_number
+    - train_name
+    - origin
+    - destination
+    - departure_time
+    - arrival_time
+    - days_of_operation
+
+validation:
+  minimum_rows: 1
+
+  required_fields:
+    - train_number
+    - origin
+    - destination
+
+  minimum_fill_rate: 0.90
+
+storage:
+  table: railway_janshatabdi

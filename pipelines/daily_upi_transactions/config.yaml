@@ -1,0 +1,40 @@
+dataset:
+  id: daily_upi_transactions
+  name: NPCI Daily UPI Transactions
+
+schedule:
+  frequency: daily
+
+source:
+  type: webpage
+  url: https://www.npci.org.in/product/upi/product-statistics
+
+fetch:
+  preferred_method: browser
+  fallback_method: http
+  timeout_seconds: 30
+
+artifact:
+  directory: raw/daily_upi_transactions
+  filename: upi_statistics.html
+
+target:
+  format: table
+
+  columns:
+    - month
+    - volume
+    - value
+
+validation:
+  minimum_rows: 1
+
+  required_fields:
+    - month
+    - volume
+    - value
+
+  minimum_fill_rate: 0.90
+
+storage:
+  table: daily_upi_transactions
