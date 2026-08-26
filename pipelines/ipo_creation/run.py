@@ -7,12 +7,12 @@ import yaml
 
 from crawl import crawl
 from parse import parse
-from validate import validate_discovery
+from validate import validate, write_csv
 
 
 HERE = Path(__file__).resolve().parent
 
-# Repository root:
+# Current repository root:
 # /content/extraction
 ROOT = HERE.parents[1]
 
@@ -52,6 +52,20 @@ async def main() -> None:
         ]["filename"]
     )
 
+    output_directory = (
+        ROOT
+        / config[
+            "output"
+        ]["directory"]
+    )
+
+    output_path = (
+        output_directory
+        / config[
+            "output"
+        ]["filename"]
+    )
+
     print()
     print("=" * 70)
     print("IPO CREATION")
@@ -59,86 +73,69 @@ async def main() -> None:
 
     print()
     print(
-        "[1/3] Crawling source with Crawl4AI..."
+        "[1/4] Crawling NPCI with Crawl4AI..."
     )
 
-    result = await crawl(
+    crawl_result = await crawl(
         raw_path
     )
 
     print(
-        f"      saved: {result['path']}"
+        f"      saved: "
+        f"{crawl_result['path']}"
     )
 
     print(
-        f"      bytes: {result['bytes']}"
+        f"      bytes: "
+        f"{crawl_result['bytes']}"
     )
 
     print()
     print(
-        "[2/3] Inspecting IPO data..."
+        "[2/4] Extracting IPO Creation table..."
     )
 
-    tables = parse(
+    dataframe = parse(
         raw_path
     )
 
     print(
-        f"      tables found: "
-        f"{len(tables)}"
+        f"      rows extracted: "
+        f"{len(dataframe)}"
     )
-
-    for index, table in enumerate(
-        tables
-    ):
-
-        print()
-        print("=" * 70)
-        print(
-            f"TABLE {index}"
-        )
-        print("=" * 70)
-
-        print(
-            "Columns:"
-        )
-
-        print(
-            table.columns.tolist()
-        )
-
-        print()
-
-        print(
-            "Rows:",
-            len(table)
-        )
-
-        print()
-
-        print(
-            table.head(10).to_string(
-                index=False
-            )
-        )
 
     print()
     print(
-        "[3/3] Basic validation..."
+        "[3/4] Validating..."
     )
 
-    valid_tables = validate_discovery(
-        tables
+    dataframe = validate(
+        dataframe
     )
 
     print(
-        f"      non-empty tables: "
-        f"{len(valid_tables)}"
+        f"      rows validated: "
+        f"{len(dataframe)}"
+    )
+
+    print()
+    print(
+        "[4/4] Writing CSV..."
+    )
+
+    write_csv(
+        dataframe,
+        output_path
+    )
+
+    print(
+        f"      output: "
+        f"{output_path}"
     )
 
     print()
     print("=" * 70)
-    print("DISCOVERY SUCCESS")
+    print("SUCCESS")
     print("=" * 70)
 
     print(
@@ -146,7 +143,12 @@ async def main() -> None:
     )
 
     print(
-        "Actual IPO schema discovered."
+        f"Rows: {len(dataframe)}"
+    )
+
+    print(
+        f"Columns: "
+        f"{list(dataframe.columns)}"
     )
 
     print("=" * 70)
