@@ -7,10 +7,14 @@ schedule:
 
 source:
   type: "1b"
-  name: Official source
+  name: NPCI official website
+  organization: NPCI
+  url: https://www.npci.org.in/product/upi/product-statistics
 
 description: >
-  IPO creation dataset as defined in the master dataset catalog.
+  Bank-wise UPI IPO (Initial Public Offering) mandate
+  creation volumes with approval, business decline,
+  and technical decline rates.
 
 fetch:
   method: crawl4ai
@@ -18,11 +22,28 @@ fetch:
 
 artifact:
   directory: raw/ipo_creation
-  filename: ipo_creation.html
+  filename: npci_ipo_creation.html
 
-output:
-  directory: output/ipo_creation
-  filename: ipo_creation.csv
+target:
   format: csv
+
+  columns:
+    - Remitter Bank
+    - Total Volume
+    - Approved%
+    - BD%
+    - TD%
+
+  types:
+    Remitter Bank: string
+    Total Volume: int
+    Approved%: float
+    BD%: float
+    TD%: float
+
+validation:
+  minimum_rows: 1
+  unique_key:
+    - Remitter Bank
 
 provenance: PROVEN
