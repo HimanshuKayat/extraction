@@ -15,43 +15,6 @@ SOURCE_URL = (
 )
 
 
-CLICK_IPO_CREATION = r"""
-(() => {
-    const elements = Array.from(
-        document.querySelectorAll(
-            'button, a, [role="tab"], [role="button"]'
-        )
-    );
-
-    const target = elements.find(element => {
-        const text = (
-            element.innerText ||
-            element.textContent ||
-            ""
-        )
-        .trim()
-        .toLowerCase();
-
-        return (
-            text.includes("ipo") &&
-            (
-                text.includes("creation") ||
-                text.includes("created")
-            )
-        );
-    });
-
-    if (!target) {
-        return false;
-    }
-
-    target.click();
-
-    return true;
-})();
-"""
-
-
 async def crawl(
     output_path: str | Path,
 ) -> dict:
@@ -71,8 +34,7 @@ async def crawl(
     crawler_config = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         page_timeout=120_000,
-        delay_before_return_html=4.0,
-        js_code=CLICK_IPO_CREATION,
+        delay_before_return_html=8.0,
         remove_overlay_elements=True,
     )
 
