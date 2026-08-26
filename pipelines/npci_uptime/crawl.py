@@ -1,3 +1,10 @@
+from pathlib import Path
+
+path = Path(
+    "pipelines/npci_uptime/crawl.py"
+)
+
+code = r'''
 from __future__ import annotations
 
 from pathlib import Path
@@ -108,3 +115,11 @@ async def crawl(
             result.html.encode("utf-8")
         ),
     }
+'''
+
+path.write_text(
+    code.strip() + "\n",
+    encoding="utf-8",
+)
+
+print(f"Written: {path.resolve()}")
