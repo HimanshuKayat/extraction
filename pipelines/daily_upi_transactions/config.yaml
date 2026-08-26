@@ -1,1 +1,26 @@
+source_id: daily_upi_transactions
 
+title: Daily UPI Transactions
+
+source: NPCI
+
+source_type: "1b"
+
+data_link: "https://www.npci.org.in/product/upi/product-statistics"
+
+frequency: daily
+
+provenance: PROVEN
+
+trigger_mode: cron
+
+parse_mode: deterministic
+
+target_schema:
+  Day: DATE
+  Volume (In Mn.): NUMERIC
+  Value (In Cr.): NUMERIC
+
+output:
+  format: csv
+  filename: daily_upi_transactions.csv
