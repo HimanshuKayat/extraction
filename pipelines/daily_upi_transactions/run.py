@@ -40,15 +40,14 @@ async def main() -> None:
         "dataset"
     ]["id"]
 
-    raw_directory = (
-        HERE
-        / config[
-            "artifact"
-        ]["directory"].split(
-            "raw/",
-            1
-        )[-1]
-    )
+    ROOT = HERE.parents[1]
+
+raw_directory = (
+    ROOT
+    / config[
+        "artifact"
+    ]["directory"]
+)
 
     raw_path = (
         raw_directory
