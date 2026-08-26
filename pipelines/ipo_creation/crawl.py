@@ -10,8 +10,46 @@ from crawl4ai import (
 )
 
 
-# Replace this with the exact URL from Agent_sources.xlsx
-SOURCE_URL = "REPLACE_WITH_CATALOG_SOURCE_URL"
+SOURCE_URL = (
+    "https://www.npci.org.in/product/upi/product-statistics"
+)
+
+
+CLICK_IPO_CREATION = r"""
+(() => {
+    const elements = Array.from(
+        document.querySelectorAll(
+            'button, a, [role="tab"], [role="button"]'
+        )
+    );
+
+    const target = elements.find(element => {
+        const text = (
+            element.innerText ||
+            element.textContent ||
+            ""
+        )
+        .trim()
+        .toLowerCase();
+
+        return (
+            text.includes("ipo") &&
+            (
+                text.includes("creation") ||
+                text.includes("created")
+            )
+        );
+    });
+
+    if (!target) {
+        return false;
+    }
+
+    target.click();
+
+    return true;
+})();
+"""
 
 
 async def crawl(
@@ -25,15 +63,6 @@ async def crawl(
         exist_ok=True,
     )
 
-    if SOURCE_URL.startswith(
-        "REPLACE_WITH"
-    ):
-        raise RuntimeError(
-            "SOURCE_URL has not been configured. "
-            "Use the exact IPO Creation source "
-            "from Agent_sources.xlsx."
-        )
-
     browser_config = BrowserConfig(
         headless=True,
         browser_type="chromium",
@@ -43,6 +72,7 @@ async def crawl(
         cache_mode=CacheMode.BYPASS,
         page_timeout=120_000,
         delay_before_return_html=4.0,
+        js_code=CLICK_IPO_CREATION,
         remove_overlay_elements=True,
     )
 
