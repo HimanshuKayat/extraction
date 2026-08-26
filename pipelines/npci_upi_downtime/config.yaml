@@ -1,0 +1,30 @@
+dataset:
+  id: npci_upi_downtime
+  name: NPCI UPI Downtime
+
+schedule:
+  frequency: monthly
+
+source:
+  type: "1b"
+  name: NPCI official website
+  organization: NPCI
+  url: https://www.npci.org.in/product/upi/product-statistics
+
+description: >
+  UPI member bank downtime incidents with incident details.
+
+fetch:
+  method: crawl4ai
+  timeout_seconds: 120
+
+artifact:
+  directory: raw/npci_upi_downtime
+  filename: npci_upi_downtime.html
+
+output:
+  directory: output/npci_upi_downtime
+  filename: npci_upi_downtime.csv
+  format: csv
+
+provenance: PROVEN
