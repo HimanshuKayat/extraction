@@ -1,10 +1,3 @@
-from pathlib import Path
-
-path = Path(
-    "pipelines/npci_uptime/crawl.py"
-)
-
-code = r'''
 from __future__ import annotations
 
 from pathlib import Path
@@ -30,39 +23,26 @@ CLICK_UPTIME = r"""
         )
     );
 
-    const target = elements.find(
-        element =>
-            (element.innerText || element.textContent || "")
-                .trim()
-                .toLowerCase()
-                .includes("uptime")
-    );
+    const target = elements.find(element => {
+        const text = (
+            element.innerText ||
+            element.textContent ||
+            ""
+        ).trim().toLowerCase();
+
+        return text.includes("uptime");
+    });
 
     if (!target) {
-        return {
-            found: false,
-            message: "Uptime control not found"
-        };
+        return;
     }
 
     target.click();
-
-    return {
-        found: true,
-        text: (
-            target.innerText ||
-            target.textContent ||
-            ""
-        ).trim()
-    };
-})()
+})();
 """
 
 
-async def crawl(
-    output_path: str | Path,
-) -> dict:
-
+async def crawl(output_path: str | Path) -> dict:
     output_path = Path(output_path)
 
     output_path.parent.mkdir(
@@ -115,11 +95,3 @@ async def crawl(
             result.html.encode("utf-8")
         ),
     }
-'''
-
-path.write_text(
-    code.strip() + "\n",
-    encoding="utf-8",
-)
-
-print(f"Written: {path.resolve()}")
