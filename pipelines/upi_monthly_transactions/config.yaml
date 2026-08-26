@@ -1,1 +1,30 @@
+dataset:
+  id: upi_monthly_transactions
+  name: UPI Monthly Transactions
 
+schedule:
+  frequency: monthly
+
+source:
+  type: webpage
+  url: https://www.npci.org.in/product/upi/product-statistics
+
+fetch:
+  preferred_method: crawl4ai
+  timeout_seconds: 120
+
+artifact:
+  directory: raw/upi_monthly_transactions
+  filename: npci_upi_product_statistics.html
+
+target:
+  format: csv
+
+  columns:
+    - Month
+    - Volume (In Mn.)
+    - Value (In Cr.)
+
+validation:
+  minimum_rows: 1
+  minimum_fill_rate: 0.90
