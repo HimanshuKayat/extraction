@@ -1,1 +1,29 @@
+dataset:
+  id: npci_uptime
+  name: NPCI Uptime for UPI
 
+schedule:
+  frequency: monthly
+
+source:
+  type: "1b"
+  name: NPCI official website
+  url: https://www.npci.org.in/product/upi/product-statistics
+
+description: >
+  Monthly NPCI UPI system uptime percentage.
+
+fetch:
+  method: crawl4ai
+  timeout_seconds: 120
+
+artifact:
+  directory: raw/npci_uptime
+  filename: npci_upi_uptime.html
+
+output:
+  directory: output/npci_uptime
+  filename: npci_uptime.csv
+  format: csv
+
+provenance: PROVEN
