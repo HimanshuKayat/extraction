@@ -1,26 +1,34 @@
-source_id: daily_upi_transactions
+dataset:
+  id: daily_upi_transactions
+  name: NPCI Daily UPI Transactions
 
-title: Daily UPI Transactions
+schedule:
+  frequency: daily
 
-source: NPCI
+source:
+  type: webpage
+  url: https://www.npci.org.in/product/upi/product-statistics
 
-source_type: "1b"
+fetch:
+  preferred_method: crawl4ai
+  fallback_method: http
+  timeout_seconds: 120
 
-data_link: "https://www.npci.org.in/product/upi/product-statistics"
+artifact:
+  directory: raw/daily_upi_transactions
+  filename: npci_upi_product_statistics.html
 
-frequency: daily
-
-provenance: PROVEN
-
-trigger_mode: cron
-
-parse_mode: deterministic
-
-target_schema:
-  Day: DATE
-  Volume (In Mn.): NUMERIC
-  Value (In Cr.): NUMERIC
-
-output:
+target:
   format: csv
-  filename: daily_upi_transactions.csv
+
+  columns:
+    - Day
+    - Volume (In Mn.)
+    - Value (In Cr.)
+
+validation:
+  minimum_rows: 1
+  minimum_fill_rate: 0.90
+
+storage:
+  table: daily_upi_transactions
