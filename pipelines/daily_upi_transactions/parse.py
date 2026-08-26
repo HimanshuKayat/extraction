@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
@@ -13,21 +14,54 @@ EXPECTED_COLUMNS = [
 ]
 
 
-def clean_column(value: Any) -> str:
+def clean_text(value: Any) -> str:
+    """Normalize whitespace and line breaks."""
 
-    return (
-        " ".join(
-            str(value)
-            .replace("\n", " ")
-            .split()
-        )
-        .strip()
-    )
+    return " ".join(
+        str(value)
+        .replace("\n", " ")
+        .split()
+    ).strip()
+
+
+def normalize_column_name(value: Any) -> str:
+    """
+    Normalize an HTML table column.
+
+    NPCI currently exposes duplicated/multi-level headers such as:
+
+        Day Day
+
+    or:
+
+        Volume (In Mn.) Volume (In Mn.)
+
+    Reduce those to the actual dataset column name.
+    """
+
+    text = clean_text(value)
+
+    # Exact expected columns are always preferred.
+    for expected in EXPECTED_COLUMNS:
+        if text == expected:
+            return expected
+
+    # Handle duplicated headers:
+    # "Day Day" -> "Day"
+    # "Value (In Cr.) Value (In Cr.)" -> "Value (In Cr.)"
+    for expected in EXPECTED_COLUMNS:
+        duplicated = f"{expected} {expected}"
+
+        if text == duplicated:
+            return expected
+
+    return text
 
 
 def normalize_table(
     dataframe: pd.DataFrame,
 ) -> pd.DataFrame:
+    """Normalize an extracted pandas HTML table."""
 
     dataframe = dataframe.copy()
 
@@ -35,7 +69,6 @@ def normalize_table(
         dataframe.columns,
         pd.MultiIndex,
     ):
-
         dataframe.columns = [
             " ".join(
                 str(part)
@@ -46,7 +79,7 @@ def normalize_table(
         ]
 
     dataframe.columns = [
-        clean_column(column)
+        normalize_column_name(column)
         for column in dataframe.columns
     ]
 
@@ -56,38 +89,37 @@ def normalize_table(
 def find_daily_upi_table(
     html: str,
 ) -> pd.DataFrame:
+    """
+    Find the Daily UPI transaction table in
+    the rendered NPCI HTML.
+    """
 
     try:
-
         tables = pd.read_html(
-            html
+            StringIO(html)
         )
 
     except ValueError as exc:
-
         raise RuntimeError(
-            "No HTML tables were found."
+            "No HTML tables were found in the "
+            "Crawl4AI output."
         ) from exc
 
     if not tables:
-
         raise RuntimeError(
             "NPCI page contains no HTML tables."
         )
 
-    candidates = []
+    candidates: list[pd.DataFrame] = []
 
     for table in tables:
 
-        table = normalize_table(
-            table
-        )
+        table = normalize_table(table)
 
         if all(
             column in table.columns
             for column in EXPECTED_COLUMNS
         ):
-
             candidates.append(
                 table[
                     EXPECTED_COLUMNS
@@ -96,22 +128,28 @@ def find_daily_upi_table(
 
     if not candidates:
 
-        discovered = [
-            list(
-                normalize_table(table).columns
+        discovered = []
+
+        for table in tables:
+            normalized = normalize_table(
+                table
             )
-            for table in tables
-        ]
+
+            discovered.append(
+                list(normalized.columns)
+            )
 
         raise RuntimeError(
             "Daily UPI table was not found.\n"
-            f"Expected columns: {EXPECTED_COLUMNS}\n"
-            f"Discovered tables: {discovered}"
+            f"Expected columns: "
+            f"{EXPECTED_COLUMNS}\n"
+            f"Discovered tables: "
+            f"{discovered}"
         )
 
-    # If multiple matching tables exist,
-    # use the one containing the greatest
-    # number of records.
+    # If multiple matching representations
+    # exist, use the one containing the most
+    # records.
     dataframe = max(
         candidates,
         key=len,
@@ -122,16 +160,36 @@ def find_daily_upi_table(
     )
 
 
+def remove_repeated_headers(
+    dataframe: pd.DataFrame,
+) -> pd.DataFrame:
+    """Remove repeated header rows from the table."""
+
+    dataframe = dataframe.copy()
+
+    mask = (
+        dataframe["Day"]
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        != "day"
+    )
+
+    return dataframe.loc[
+        mask
+    ].reset_index(drop=True)
+
+
 def parse(
     artifact_path: str | Path,
 ) -> pd.DataFrame:
+    """Parse the crawled NPCI Daily UPI page."""
 
     path = Path(
         artifact_path
     )
 
     if not path.exists():
-
         raise FileNotFoundError(
             f"Artifact not found: {path}"
         )
@@ -142,178 +200,17 @@ def parse(
     )
 
     if "<html" not in html.lower():
-
         raise RuntimeError(
-            "Artifact does not appear to be HTML."
+            "Crawl artifact does not appear "
+            "to be HTML."
         )
 
     dataframe = find_daily_upi_table(
         html
     )
 
-    # Remove accidental repeated header rows.
-    dataframe = dataframe[
-        dataframe["Day"]
-        .astype(str)
-        .str.strip()
-        .str.lower()
-        != "day"
-    ]
-
-    return dataframe.reset_index(
-        drop=True
+    dataframe = remove_repeated_headers(
+        dataframe
     )
 
-
-def validate(
-    dataframe: pd.DataFrame,
-    config: dict[str, Any],
-) -> dict[str, Any]:
-
-    if dataframe.empty:
-
-        return {
-            "success": False,
-            "error": "No rows extracted.",
-        }
-
-    missing = [
-        column
-        for column in EXPECTED_COLUMNS
-        if column not in dataframe.columns
-    ]
-
-    if missing:
-
-        return {
-            "success": False,
-            "error": (
-                "Missing required columns: "
-                f"{missing}"
-            ),
-        }
-
-    dataframe = dataframe[
-        EXPECTED_COLUMNS
-    ].copy()
-
-    dataframe["Day"] = pd.to_datetime(
-        dataframe["Day"],
-        errors="coerce",
-    )
-
-    dataframe[
-        "Volume (In Mn.)"
-    ] = pd.to_numeric(
-        dataframe[
-            "Volume (In Mn.)"
-        ]
-        .astype(str)
-        .str.replace(
-            ",",
-            "",
-            regex=False,
-        )
-        .str.strip(),
-        errors="coerce",
-    )
-
-    dataframe[
-        "Value (In Cr.)"
-    ] = pd.to_numeric(
-        dataframe[
-            "Value (In Cr.)"
-        ]
-        .astype(str)
-        .str.replace(
-            ",",
-            "",
-            regex=False,
-        )
-        .str.strip(),
-        errors="coerce",
-    )
-
-    if dataframe["Day"].isna().any():
-
-        return {
-            "success": False,
-            "error": "Invalid Day values found.",
-        }
-
-    if dataframe[
-        "Volume (In Mn.)"
-    ].isna().any():
-
-        return {
-            "success": False,
-            "error": (
-                "Invalid Volume "
-                "values found."
-            ),
-        }
-
-    if dataframe[
-        "Value (In Cr.)"
-    ].isna().any():
-
-        return {
-            "success": False,
-            "error": (
-                "Invalid Value "
-                "values found."
-            ),
-        }
-
-    if (
-        dataframe[
-            "Volume (In Mn.)"
-        ] < 0
-    ).any():
-
-        return {
-            "success": False,
-            "error": (
-                "Negative transaction "
-                "volume found."
-            ),
-        }
-
-    if (
-        dataframe[
-            "Value (In Cr.)"
-        ] < 0
-    ).any():
-
-        return {
-            "success": False,
-            "error": (
-                "Negative transaction "
-                "value found."
-            ),
-        }
-
-    if dataframe[
-        "Day"
-    ].duplicated().any():
-
-        return {
-            "success": False,
-            "error": (
-                "Duplicate Day values found."
-            ),
-        }
-
-    return {
-        "success": True,
-        "rows": len(dataframe),
-        "columns": list(
-            dataframe.columns
-        ),
-        "date_min": str(
-            dataframe["Day"].min().date()
-        ),
-        "date_max": str(
-            dataframe["Day"].max().date()
-        ),
-    }
+    return dataframe
