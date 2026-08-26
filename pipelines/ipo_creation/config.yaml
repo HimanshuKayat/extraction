@@ -12,9 +12,8 @@ source:
   url: https://www.npci.org.in/product/upi/product-statistics
 
 description: >
-  Bank-wise UPI IPO (Initial Public Offering) mandate
-  creation volumes with approval, business decline,
-  and technical decline rates.
+  Bank-wise UPI IPO mandate creation volumes with
+  approval, business decline, and technical decline rates.
 
 fetch:
   method: crawl4ai
@@ -24,9 +23,13 @@ artifact:
   directory: raw/ipo_creation
   filename: npci_ipo_creation.html
 
-target:
+output:
+  directory: output/ipo_creation
+  filename: ipo_creation.csv
   format: csv
 
+target:
+  format: csv
   columns:
     - Remitter Bank
     - Total Volume
