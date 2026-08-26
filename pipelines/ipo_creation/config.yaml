@@ -1,0 +1,28 @@
+dataset:
+  id: ipo_creation
+  name: IPO Creation
+
+schedule:
+  frequency: monthly
+
+source:
+  type: "1b"
+  name: Official source
+
+description: >
+  IPO creation dataset as defined in the master dataset catalog.
+
+fetch:
+  method: crawl4ai
+  timeout_seconds: 120
+
+artifact:
+  directory: raw/ipo_creation
+  filename: ipo_creation.html
+
+output:
+  directory: output/ipo_creation
+  filename: ipo_creation.csv
+  format: csv
+
+provenance: PROVEN
