@@ -46,13 +46,15 @@ class RERAPipeline:
         self.parser = RERAParser(config_path)
         self.validator = RERAValidator(config_path)
 
-    async def run(self, skip_crawl: bool = False, skip_download: bool = False) -> bool:
+    async def run(self, skip_crawl: bool = False, skip_download: bool = False, 
+                  manual_html: Optional[str] = None) -> bool:
         """
         Run the complete pipeline.
         
         Args:
             skip_crawl: Skip crawling and use existing metadata
             skip_download: Skip PDF downloads
+            manual_html: Path to manually downloaded HTML file
             
         Returns:
             bool: True if successful, False otherwise
@@ -65,21 +67,56 @@ class RERAPipeline:
             # Step 1: Crawl (if not skipped)
             if not skip_crawl:
                 print("\n[1/5] Crawling RERA Delhi website for project listings...")
-                crawl_results = await self.crawler.crawl()
                 
-                if not crawl_results.get('success'):
-                    print("WARNING: Crawling failed, but continuing with existing data if available...")
-                    # Don't return False, try to use existing metadata
-                
-                projects_found = crawl_results.get('projects_found', 0)
-                download_summary = crawl_results.get('download_summary', {})
-                
-                if projects_found > 0:
-                    print(f"✓ Found {projects_found} projects")
-                    if not skip_download:
-                        print(f"✓ Downloaded {download_summary.get('successful_downloads', 0)} PDFs")
+                # If manual HTML is provided, use it
+                if manual_html and Path(manual_html).exists():
+                    print(f"Using manually provided HTML: {manual_html}")
+                    with open(manual_html, 'r', encoding='utf-8') as f:
+                        html_content = f.read()
+                    from crawl import RERACrawler
+                    crawler = RERACrawler(str(self.config_path))
+                    projects = crawler._extract_pdf_links(html_content)
+                    if projects:
+                        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                        project_file = self.metadata_dir / f'projects_{timestamp}.json'
+                        with open(project_file, 'w') as f:
+                            json.dump({
+                                'projects': projects,
+                                'count': len(projects),
+                                'source': manual_html,
+                                'timestamp': datetime.now().isoformat()
+                            }, f, indent=2)
+                        self.crawler.projects = projects
+                        print(f"✓ Extracted {len(projects)} projects from manual HTML")
+                    else:
+                        print("No projects found in manual HTML")
                 else:
-                    print("No new projects found, checking existing metadata...")
+                    # Try automated crawling
+                    crawl_results = await self.crawler.crawl()
+                    
+                    if not crawl_results.get('success'):
+                        print("WARNING: Automated crawling failed")
+                        print("  The site might be blocking automated requests or be unreachable.")
+                        print("  You can manually download the HTML and use the --manual-html option.")
+                        
+                        # Check if we have existing metadata
+                        projects_file = self.crawler._find_latest_projects_file()
+                        if projects_file:
+                            print(f"  Using existing metadata from: {projects_file}")
+                            with open(projects_file, 'r') as f:
+                                data = json.load(f)
+                                self.crawler.projects = data.get('projects', [])
+                            if self.crawler.projects:
+                                print(f"  Loaded {len(self.crawler.projects)} projects from metadata")
+                                crawl_results['success'] = True
+                    
+                    projects_found = crawl_results.get('projects_found', 0)
+                    download_summary = crawl_results.get('download_summary', {})
+                    
+                    if projects_found > 0:
+                        print(f"✓ Found {projects_found} projects")
+                        if not skip_download:
+                            print(f"✓ Downloaded {download_summary.get('successful_downloads', 0)} PDFs")
             else:
                 print("\n[1/5] Skipping crawl (using existing metadata)")
 
@@ -88,7 +125,10 @@ class RERAPipeline:
             try:
                 parsed_data, parsed_file = self.parser.parse()
             except FileNotFoundError:
-                print("ERROR: No metadata found. Run without --skip-crawl first.")
+                print("ERROR: No metadata found. Options:")
+                print("  1. Run without --skip-crawl to try crawling again")
+                print("  2. Manually download the HTML and use --manual-html <file>")
+                print("  3. Create a sample metadata file with --create-sample")
                 return False
             
             if not parsed_data:
@@ -99,22 +139,31 @@ class RERAPipeline:
 
             # Step 3: Validate
             print("\n[3/5] Validating project data...")
-            validation_results = self.validator.validate(parsed_data)
-            
-            if validation_results.get('valid_projects', 0) == 0:
-                print("WARNING: No valid projects found")
-                print(f"  Total projects: {validation_results.get('total_projects', 0)}")
-                print(f"  Invalid projects: {validation_results.get('invalid_projects', 0)}")
-                # Continue anyway to export what we have
-            else:
-                valid_count = validation_results.get('valid_projects', 0)
-                total_count = validation_results.get('total_projects', 0)
-                print(f"✓ {valid_count}/{total_count} projects valid")
+            try:
+                validation_results = self.validator.validate(parsed_data)
+                
+                if validation_results.get('valid_projects', 0) == 0:
+                    print("WARNING: No valid projects found")
+                    print(f"  Total projects: {validation_results.get('total_projects', 0)}")
+                    print(f"  Invalid projects: {validation_results.get('invalid_projects', 0)}")
+                    # Continue anyway to export what we have
+                else:
+                    valid_count = validation_results.get('valid_projects', 0)
+                    total_count = validation_results.get('total_projects', 0)
+                    print(f"✓ {valid_count}/{total_count} projects valid")
+            except Exception as e:
+                print(f"WARNING: Validation issue - {e}")
+                print("  Continuing with export anyway...")
+                validation_results = {}
 
             # Step 4: Export CSV
             print("\n[4/5] Exporting to CSV...")
-            csv_file = self.parser.export_csv(parsed_data)
-            print(f"✓ CSV exported: {csv_file}")
+            try:
+                csv_file = self.parser.export_csv(parsed_data)
+                print(f"✓ CSV exported: {csv_file}")
+            except Exception as e:
+                print(f"ERROR: Failed to export CSV - {e}")
+                return False
 
             # Step 5: Generate summary
             print("\n[5/5] Generating summary...")
@@ -175,8 +224,8 @@ class RERAPipeline:
                 'corrupt': pdf_stats.get('corrupt', 0),
                 'total_size_mb': total_pdf_size_mb
             },
-            'errors': validation_results.get('errors', [])[:10],  # First 10 errors
-            'warnings': validation_results.get('warnings', [])[:10]  # First 10 warnings
+            'errors': validation_results.get('errors', [])[:10],
+            'warnings': validation_results.get('warnings', [])[:10]
         }
 
         return summary
@@ -192,34 +241,81 @@ class RERAPipeline:
         return summary_file
 
 
+async def create_sample_metadata():
+    """Create sample metadata for testing."""
+    sample_projects = [
+        {
+            'project_name': 'Sample Project 1',
+            'promoter_name': 'Sample Promoter',
+            'registration_number': 'RERA/2024/001',
+            'district': 'Delhi',
+            'registration_date': '2024-01-01',
+            'pdf_url': 'https://example.com/sample1.pdf'
+        },
+        {
+            'project_name': 'Sample Project 2',
+            'promoter_name': 'Another Promoter',
+            'registration_number': 'RERA/2024/002',
+            'district': 'Delhi',
+            'registration_date': '2024-01-02',
+            'pdf_url': 'https://example.com/sample2.pdf'
+        }
+    ]
+    
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    output_dir = Path('pipelines/rera_delhi_projects/metadata')
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    project_file = output_dir / f'projects_{timestamp}.json'
+    with open(project_file, 'w') as f:
+        json.dump({
+            'projects': sample_projects,
+            'count': len(sample_projects),
+            'source': 'sample_data',
+            'timestamp': datetime.now().isoformat()
+        }, f, indent=2)
+    
+    print(f"Created sample metadata: {project_file}")
+    return project_file
+
+
 async def main():
     """Main entry point."""
+    import argparse
+    
     config_path = Path(__file__).parent / 'config.yaml'
 
     if not config_path.exists():
         print(f"Config file not found: {config_path}")
         return False
 
-    # Parse command line arguments
-    import argparse
     parser = argparse.ArgumentParser(description='RERA Delhi Projects Pipeline')
     parser.add_argument('--skip-crawl', action='store_true', 
                        help='Skip crawling and use existing metadata')
     parser.add_argument('--skip-download', action='store_true',
                        help='Skip PDF downloads')
+    parser.add_argument('--manual-html', type=str,
+                       help='Path to manually downloaded HTML file')
+    parser.add_argument('--create-sample', action='store_true',
+                       help='Create sample metadata for testing')
     args = parser.parse_args()
+
+    # Create sample metadata if requested
+    if args.create_sample:
+        await create_sample_metadata()
+        return True
 
     # Run pipeline
     pipeline = RERAPipeline(str(config_path))
     success = await pipeline.run(
         skip_crawl=args.skip_crawl,
-        skip_download=args.skip_download
+        skip_download=args.skip_download,
+        manual_html=args.manual_html
     )
 
     return success
 
 
 if __name__ == "__main__":
-    # For standalone execution
     success = asyncio.run(main())
     sys.exit(0 if success else 1)
