@@ -146,13 +146,13 @@ class WikimediaAirportValidator:
         return range_values[0] <= coord <= range_values[1]
 
 
-def main():
+if __name__ == "__main__":
     """Main entry point for validation."""
     config_path = Path(__file__).parent / 'config.yaml'
 
     if not config_path.exists():
         print(f"Config file not found: {config_path}")
-        return False
+        exit(1)
 
     validator = WikimediaAirportValidator(str(config_path))
 
@@ -160,16 +160,10 @@ def main():
         results = validator.validate()
         if results['valid']:
             print(f"\n✓ Validation passed: {results['message']}")
-            return True
+            exit(0)
         else:
             print(f"\n✗ Validation failed: {results['message']}")
-            return False
+            exit(1)
     except Exception as e:
         print(f"✗ Validation failed: {e}")
-        return False
-
-
-if __name__ == "__main__":
-    import sys
-    success = main()
-    sys.exit(0 if success else 1)
+        exit(1)
