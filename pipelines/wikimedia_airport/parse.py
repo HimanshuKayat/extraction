@@ -133,13 +133,13 @@ class WikimediaAirportParser:
         return output_file
 
 
-def main():
+if __name__ == "__main__":
     """Main entry point for parsing."""
     config_path = Path(__file__).parent / 'config.yaml'
 
     if not config_path.exists():
         print(f"Config file not found: {config_path}")
-        return False
+        exit(1)
 
     parser = WikimediaAirportParser(str(config_path))
 
@@ -148,13 +148,7 @@ def main():
         csv_file = parser.export_csv(parsed_data)
         print(f"\n✓ Successfully parsed and exported {len(parsed_data)} airports")
         print(f"CSV saved to: {csv_file}")
-        return True
+        exit(0)
     except Exception as e:
         print(f"✗ Parsing failed: {e}")
-        return False
-
-
-if __name__ == "__main__":
-    import sys
-    success = main()
-    sys.exit(0 if success else 1)
+        exit(1)
