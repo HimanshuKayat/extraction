@@ -144,7 +144,10 @@ class RERAValidator:
                         if path.exists():
                             results['pdf_stats']['total_size_mb'] += path.stat().st_size / (1024 * 1024)
                 else:
-                    results['pdf_stats']['missing' if 'not found' in error else 'corrupt'] += 1
+                    if 'not found' in error.lower():
+                        results['pdf_stats']['missing'] += 1
+                    else:
+                        results['pdf_stats']['corrupt'] += 1
                     project_errors.append(f"PDF validation failed: {error}")
 
             # 4. Check if required fields are present
@@ -161,4 +164,45 @@ class RERAValidator:
                 results['invalid_projects'] += 1
                 results['errors'].append({
                     'project_index': i,
-                    'project
+                    'project_name': project.get('Project_Name', 'Unknown'),
+                    'errors': project_errors,
+                    'warnings': project_warnings
+                })
+
+            # Add warnings separately
+            if project_warnings:
+                results['warnings'].append({
+                    'project_index': i,
+                    'project_name': project.get('Project_Name', 'Unknown'),
+                    'warnings': project_warnings
+                })
+
+        # Save validation report
+        report_file = self.output_dir / f"validation_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        with open(report_file, 'w') as f:
+            json.dump(results, f, indent=2)
+
+        print(f"Validation results: {results['valid_projects']}/{results['total_projects']} projects valid")
+        if results['warnings']:
+            print(f"Warnings: {len(results['warnings'])}")
+        if results['errors']:
+            print(f"Errors: {len(results['errors'])}")
+            for error in results['errors'][:3]:  # Show first 3 errors
+                print(f"  - Project {error['project_index']+1}: {', '.join(error['errors'][:2])}")
+
+        return results
+
+
+if __name__ == "__main__":
+    # For standalone testing
+    config_path = Path(__file__).parent / 'config.yaml'
+    validator = RERAValidator(str(config_path))
+
+    try:
+        results = validator.validate()
+        if results['valid_projects'] > 0:
+            print("Validation passed!")
+        else:
+            print("Validation failed!")
+    except Exception as e:
+        print(f"Validation failed: {e}")
