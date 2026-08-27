@@ -22,8 +22,13 @@ except ImportError:
     print("Playwright not available. Please install: pip install playwright && playwright install")
 
 # Fallback to requests if playwright not available
-import requests
-from bs4 import BeautifulSoup
+try:
+    import requests
+    from bs4 import BeautifulSoup
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
+    print("Requests/BeautifulSoup not available. Please install: pip install requests beautifulsoup4")
 
 
 class RERACrawler:
@@ -63,6 +68,9 @@ class RERACrawler:
         """
         Extract PDF links and project information from HTML.
         """
+        if not REQUESTS_AVAILABLE:
+            return []
+
         soup = BeautifulSoup(html, 'html.parser')
         projects = []
 
@@ -107,53 +115,54 @@ class RERACrawler:
 
         return projects
 
-    async def _get_playwright_page(self) -> Optional[Page]:
-        """
-        Initialize Playwright and return a page.
-        """
-        if not PLAYWRIGHT_AVAILABLE:
-            return None
-
-        playwright = await async_playwright().start()
-        browser = await playwright.chromium.launch(headless=self.headless)
-        context = await browser.new_context(
-            viewport={'width': 1920, 'height': 1080},
-            accept_downloads=True
-        )
-        page = await context.new_page()
-        return page
-
     async def crawl_with_playwright(self) -> bool:
         """
         Crawl RERA website using Playwright with PDF detection.
         """
+        if not PLAYWRIGHT_AVAILABLE:
+            print("Playwright not available, trying requests fallback...")
+            return await self.crawl_with_requests()
+
         print(f"Starting Playwright crawl for: {self.base_url}")
 
         try:
             async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=self.headless)
+                browser = await p.chromium.launch(
+                    headless=self.headless,
+                    args=['--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage']
+                )
                 context = await browser.new_context(
                     viewport={'width': 1920, 'height': 1080},
-                    accept_downloads=True
+                    accept_downloads=True,
+                    ignore_https_errors=True
                 )
                 page = await context.new_page()
 
-                # Navigate to page
+                # Navigate to page with different wait strategy
                 print(f"Navigating to {self.base_url}")
-                await page.goto(self.base_url, wait_until='networkidle', timeout=self.timeout)
+                try:
+                    await page.goto(
+                        self.base_url, 
+                        wait_until='domcontentloaded',  # Changed from 'networkidle' to 'domcontentloaded'
+                        timeout=self.timeout
+                    )
+                except Exception as e:
+                    print(f"Initial navigation failed: {e}")
+                    # Try with different wait strategy
+                    await page.goto(
+                        self.base_url,
+                        wait_until='commit',
+                        timeout=self.timeout
+                    )
 
                 # Wait for content to load
-                await page.wait_for_timeout(3000)
+                await page.wait_for_timeout(5000)
 
-                # Handle any popups or dialogs
+                # Try to wait for table or content
                 try:
-                    # Close any modal/dialog if present
-                    close_button = await page.query_selector('button:has-text("Close")')
-                    if close_button:
-                        await close_button.click()
-                        await page.wait_for_timeout(1000)
+                    await page.wait_for_selector('table', timeout=10000)
                 except:
-                    pass
+                    print("No table found, continuing...")
 
                 # Get the page HTML
                 html_content = await page.content()
@@ -202,10 +211,15 @@ class RERACrawler:
             # Try fallback method
             return await self.crawl_with_requests()
 
-    def crawl_with_requests(self) -> bool:
+    async def crawl_with_requests(self) -> bool:
         """
         Fallback: Use requests and BeautifulSoup to crawl the page.
+        This is now an async method.
         """
+        if not REQUESTS_AVAILABLE:
+            print("Requests not available for fallback")
+            return False
+
         print(f"Using requests fallback for: {self.base_url}")
 
         try:
@@ -219,8 +233,33 @@ class RERACrawler:
                 'Upgrade-Insecure-Requests': '1'
             }
 
-            response = requests.get(self.base_url, headers=headers, timeout=30)
-            response.raise_for_status()
+            # Try with a session and longer timeout
+            session = requests.Session()
+            session.timeout = 60
+            
+            # Try multiple times with increasing timeouts
+            for attempt in range(3):
+                try:
+                    timeout = 30 + (attempt * 30)
+                    print(f"Attempt {attempt + 1} with timeout {timeout}s")
+                    response = session.get(
+                        self.base_url, 
+                        headers=headers, 
+                        timeout=timeout,
+                        verify=False  # Ignore SSL verification for problematic sites
+                    )
+                    response.raise_for_status()
+                    break
+                except requests.exceptions.Timeout:
+                    if attempt == 2:
+                        raise
+                    print(f"Timeout, retrying...")
+                    await asyncio.sleep(2)
+                except Exception as e:
+                    if attempt == 2:
+                        raise
+                    print(f"Error: {e}, retrying...")
+                    await asyncio.sleep(2)
 
             # Extract projects from HTML
             projects = self._extract_pdf_links(response.text)
@@ -240,9 +279,22 @@ class RERACrawler:
                 print(f"Found {len(projects)} projects with PDF links")
                 return True
             else:
+                # If no projects found with PDF links, try to find any tables
+                soup = BeautifulSoup(response.text, 'html.parser')
+                tables = soup.find_all('table')
+                if tables:
+                    print(f"Found {len(tables)} tables but no PDF links")
+                    # Could add more parsing logic here
+                
                 print("No projects found")
                 return False
 
+        except requests.exceptions.Timeout:
+            print("Connection timeout - the site might be slow or unavailable")
+            return False
+        except requests.exceptions.ConnectionError:
+            print("Connection error - the site might be down")
+            return False
         except Exception as e:
             print(f"Requests crawl failed: {e}")
             return False
@@ -297,13 +349,19 @@ class RERACrawler:
         """
         try:
             async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=self.headless)
-                context = await browser.new_context(accept_downloads=True)
+                browser = await p.chromium.launch(
+                    headless=self.headless,
+                    args=['--disable-gpu', '--no-sandbox']
+                )
+                context = await browser.new_context(
+                    accept_downloads=True,
+                    ignore_https_errors=True
+                )
                 page = await context.new_page()
 
                 # Navigate to PDF URL
                 async with page.expect_download() as download_info:
-                    await page.goto(pdf_url, wait_until='networkidle', timeout=self.timeout)
+                    await page.goto(pdf_url, wait_until='domcontentloaded', timeout=self.timeout)
 
                 download = await download_info.value
                 # Save the file
@@ -311,6 +369,7 @@ class RERACrawler:
 
                 project['pdf_local_path'] = str(filepath)
                 project['download_status'] = 'success'
+                project['download_date'] = datetime.now().isoformat()
 
                 # Update metadata
                 self._update_metadata(project)
@@ -327,6 +386,9 @@ class RERACrawler:
         """
         Download PDF using requests with streaming.
         """
+        if not REQUESTS_AVAILABLE:
+            return False
+
         try:
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -336,7 +398,13 @@ class RERACrawler:
 
             # Use a session for cookies
             session = requests.Session()
-            response = session.get(pdf_url, headers=headers, timeout=self.timeout_seconds, stream=True)
+            response = session.get(
+                pdf_url, 
+                headers=headers, 
+                timeout=self.timeout_seconds, 
+                stream=True,
+                verify=False
+            )
             response.raise_for_status()
 
             # Check content type
@@ -361,6 +429,7 @@ class RERACrawler:
 
             project['pdf_local_path'] = str(filepath)
             project['download_status'] = 'success'
+            project['download_date'] = datetime.now().isoformat()
 
             # Update metadata
             self._update_metadata(project)
@@ -470,10 +539,24 @@ class RERACrawler:
         Returns summary of crawl results.
         """
         # First, crawl the website to get project list
+        success = False
+        
         if PLAYWRIGHT_AVAILABLE:
             success = await self.crawl_with_playwright()
         else:
-            success = self.crawl_with_requests()
+            success = await self.crawl_with_requests()
+
+        if not success or not self.projects:
+            # Check if we have existing metadata
+            projects_file = self._find_latest_projects_file()
+            if projects_file:
+                print(f"Using existing metadata from: {projects_file}")
+                with open(projects_file, 'r') as f:
+                    data = json.load(f)
+                    self.projects = data.get('projects', [])
+                if self.projects:
+                    print(f"Loaded {len(self.projects)} projects from metadata")
+                    success = True
 
         if not success or not self.projects:
             return {'success': False, 'projects_found': 0, 'message': 'No projects found'}
