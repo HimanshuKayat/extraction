@@ -1,0 +1,48 @@
+# RERA Delhi Projects Pipeline Configuration
+dataset:
+  name: rera_delhi_projects
+  canonical_columns:
+    - Project_ID
+    - Project_Name
+    - Promoter_Name
+    - District
+    - Registration_Number
+    - Registration_Date
+    - PDF_URL
+    - PDF_Local_Path
+    - Download_Status
+    - Download_Date
+
+source:
+  base_url: https://erera.co.in/reradelhiindex/PublicView/RegisteredProjectDetail
+  api_endpoint: https://erera.co.in/reradelhiindex/PublicView/RegisteredProjectDetail
+  # The site uses POST requests with form data
+  # We'll need to extract project listings from HTML
+  project_listing_url: https://erera.co.in/reradelhiindex/PublicView/RegisteredProjectDetail
+  
+paths:
+  raw_dir: pipelines/rera_delhi_projects/raw
+  output_dir: pipelines/rera_delhi_projects/output
+  pdf_dir: pipelines/rera_delhi_projects/pdfs
+  metadata_dir: pipelines/rera_delhi_projects/metadata
+  # For Colab: /content/extraction/pipelines/rera_delhi_projects/
+
+download:
+  max_retries: 3
+  timeout: 60  # seconds
+  chunk_size: 8192
+  concurrent_downloads: 5
+  pdf_filename_pattern: "{registration_number}_{project_name}.pdf"
+  resume_downloads: true
+  
+browser:
+  headless: true
+  timeout: 60000  # milliseconds
+  wait_for_selector: "table"
+  wait_timeout: 10000
+
+validation:
+  min_rows: 1
+  require_pdf_download: true
+  allowed_extensions: ['.pdf']
+  max_pdf_size_mb: 50
