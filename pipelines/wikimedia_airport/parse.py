@@ -8,7 +8,7 @@ import yaml
 import csv
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 
 class WikimediaAirportParser:
