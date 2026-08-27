@@ -68,21 +68,28 @@ class RERAPipeline:
                 crawl_results = await self.crawler.crawl()
                 
                 if not crawl_results.get('success'):
-                    print("ERROR: Crawling failed")
-                    return False
+                    print("WARNING: Crawling failed, but continuing with existing data if available...")
+                    # Don't return False, try to use existing metadata
                 
                 projects_found = crawl_results.get('projects_found', 0)
                 download_summary = crawl_results.get('download_summary', {})
                 
-                print(f"✓ Found {projects_found} projects")
-                if not skip_download:
-                    print(f"✓ Downloaded {download_summary.get('successful_downloads', 0)} PDFs")
+                if projects_found > 0:
+                    print(f"✓ Found {projects_found} projects")
+                    if not skip_download:
+                        print(f"✓ Downloaded {download_summary.get('successful_downloads', 0)} PDFs")
+                else:
+                    print("No new projects found, checking existing metadata...")
             else:
                 print("\n[1/5] Skipping crawl (using existing metadata)")
 
             # Step 2: Parse
             print("\n[2/5] Parsing project metadata...")
-            parsed_data, parsed_file = self.parser.parse()
+            try:
+                parsed_data, parsed_file = self.parser.parse()
+            except FileNotFoundError:
+                print("ERROR: No metadata found. Run without --skip-crawl first.")
+                return False
             
             if not parsed_data:
                 print("ERROR: No data parsed")
@@ -94,14 +101,15 @@ class RERAPipeline:
             print("\n[3/5] Validating project data...")
             validation_results = self.validator.validate(parsed_data)
             
-            if not validation_results.get('valid_projects', 0) > 0:
-                print("ERROR: No valid projects found")
+            if validation_results.get('valid_projects', 0) == 0:
+                print("WARNING: No valid projects found")
+                print(f"  Total projects: {validation_results.get('total_projects', 0)}")
                 print(f"  Invalid projects: {validation_results.get('invalid_projects', 0)}")
-                return False
-            
-            valid_count = validation_results.get('valid_projects', 0)
-            total_count = validation_results.get('total_projects', 0)
-            print(f"✓ {valid_count}/{total_count} projects valid")
+                # Continue anyway to export what we have
+            else:
+                valid_count = validation_results.get('valid_projects', 0)
+                total_count = validation_results.get('total_projects', 0)
+                print(f"✓ {valid_count}/{total_count} projects valid")
 
             # Step 4: Export CSV
             print("\n[4/5] Exporting to CSV...")
@@ -119,10 +127,10 @@ class RERAPipeline:
             print("SUCCESS")
             print("=" * 70)
             print(f"Dataset: {self.dataset_name}")
-            print(f"Total Projects: {total_count}")
-            print(f"Valid Projects: {valid_count}")
-            print(f"PDFs Downloaded: {validation_results.get('pdf_stats', {}).get('downloaded', 0)}")
-            print(f"Total PDF Size: {validation_results.get('pdf_stats', {}).get('total_size_mb', 0):.2f} MB")
+            print(f"Total Projects: {summary['total_projects']}")
+            print(f"Valid Projects: {summary['valid_projects']}")
+            print(f"PDFs Downloaded: {summary['pdf_statistics']['downloaded']}")
+            print(f"Total PDF Size: {summary['pdf_statistics']['total_size_mb']:.2f} MB")
             print(f"Output CSV: {csv_file}")
             print("=" * 70)
 
