@@ -1,0 +1,67 @@
+# Vaishno Devi Yatra Statistics Pipeline Configuration
+dataset:
+  name: vaishno_devi_yatra
+  datasets:
+    annual:
+      name: annual_yatra_statistics
+      description: "Annual Yatra figures from 1986 to 2025"
+      columns:
+        - S.No.
+        - Year
+        - No_of_Yatries_In_Lakhs
+    monthly_1986_onwards:
+      name: monthly_yatra_statistics_1986_onwards
+      description: "Month-wise break-up of Yatra from 1986 onwards"
+      columns:
+        - Year
+        - January
+        - February
+        - March
+        - April
+        - May
+        - June
+        - July
+        - August
+        - September
+        - October
+        - November
+        - December
+        - Total
+    monthly_2024_2025:
+      name: monthly_yatra_statistics_2024_2025
+      description: "Month-wise break-up of Yatra for 2024-2025"
+      columns:
+        - S.No.
+        - Month
+        - No_of_Yatries
+
+source:
+  url: https://www.maavaishnodevi.org/yatrastatistics
+  encoding: utf-8
+
+paths:
+  raw_dir: pipelines/vaishno_devi_yatra/raw
+  output_dir: pipelines/vaishno_devi_yatra/output
+  metadata_dir: pipelines/vaishno_devi_yatra/metadata
+
+scraping:
+  timeout: 30
+  max_retries: 3
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  table_selectors:
+    annual: "table"  # Will be refined during parsing
+    monthly_1986_onwards: "table"
+    monthly_2024_2025: "table"
+
+validation:
+  min_rows: 1
+  required_columns:
+    annual:
+      - Year
+      - No_of_Yatries_In_Lakhs
+    monthly_1986_onwards:
+      - Year
+      - Total
+    monthly_2024_2025:
+      - Month
+      - No_of_Yatries
