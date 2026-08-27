@@ -1,0 +1,53 @@
+# Wikimedia Airport Data Pipeline Configuration
+dataset:
+  name: wikimedia_airport
+  canonical_columns:
+    - Sno.
+    - Airport
+    - City
+    - Latitude
+    - Longitude
+
+source:
+  # Wikidata SPARQL endpoint
+  endpoint: https://query.wikidata.org/sparql
+  # Query to get Indian airports with coordinates
+  query: |
+    SELECT ?airportLabel ?cityLabel ?lat ?lon
+    WHERE {
+      ?airport wdt:P31 wd:Q1248784;      # Instance of airport
+                wdt:P17 wd:Q668;          # Country: India
+                wdt:P625 ?coord.          # Has coordinates
+      
+      OPTIONAL {
+        ?airport wdt:P131 ?city.          # Located in administrative territory
+      }
+      
+      BIND(geof:latitude(?coord) AS ?lat)
+      BIND(geof:longitude(?coord) AS ?lon)
+      
+      SERVICE wikibase:label {
+        bd:serviceParam wikibase:language "en".
+      }
+    }
+    ORDER BY ?airportLabel
+
+paths:
+  raw_dir: pipelines/wikimedia_airport/raw
+  output_dir: pipelines/wikimedia_airport/output
+  metadata_dir: pipelines/wikimedia_airport/metadata
+
+api:
+  timeout: 60
+  max_retries: 3
+  retry_delay: 2
+  user_agent: "Mozilla/5.0 (compatible; DataExtraction/1.0; +https://github.com/HimanshuKayat/extraction)"
+
+validation:
+  min_rows: 1
+  required_columns:
+    - Airport
+    - Latitude
+    - Longitude
+  latitude_range: [-90, 90]
+  longitude_range: [-180, 180]
