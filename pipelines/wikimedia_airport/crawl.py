@@ -204,26 +204,20 @@ class WikidataCrawler:
         }
 
 
-def main():
+if __name__ == "__main__":
     """Main entry point for crawling."""
     config_path = Path(__file__).parent / 'config.yaml'
 
     if not config_path.exists():
         print(f"Config file not found: {config_path}")
-        return False
+        exit(1)
 
     crawler = WikidataCrawler(str(config_path))
     results = crawler.crawl()
 
     if results.get('success'):
         print(f"\n✓ Successfully extracted {results['airports_found']} airports")
-        return True
+        exit(0)
     else:
         print(f"\n✗ Crawl failed: {results.get('message', 'Unknown error')}")
-        return False
-
-
-if __name__ == "__main__":
-    import sys
-    success = main()
-    sys.exit(0 if success else 1)
+        exit(1)
