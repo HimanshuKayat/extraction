@@ -1,34 +1,35 @@
+# Daily UPI Transactions Pipeline Configuration
 dataset:
-  id: daily_upi_transactions
-  name: NPCI Daily UPI Transactions
-
-schedule:
-  frequency: daily
-
-source:
-  type: webpage
-  url: https://www.npci.org.in/product/upi/product-statistics
-
-fetch:
-  preferred_method: crawl4ai
-  fallback_method: http
-  timeout_seconds: 120
-
-artifact:
-  directory: raw/daily_upi_transactions
-  filename: npci_upi_product_statistics.html
-
-target:
-  format: csv
-
-  columns:
+  name: daily_upi_transactions
+  canonical_columns:
     - Day
     - Volume (In Mn.)
     - Value (In Cr.)
 
-validation:
-  minimum_rows: 1
-  minimum_fill_rate: 0.90
+source:
+  url: https://www.npci.org.in/product/upi/product-statistics
+  api_endpoint: https://www.npci.org.in/api/product-statistic/tab/detail
+  api_params:
+    product_name: upi
+    tab_name: product-statistics-upi
+    # year_range will be dynamically determined
+    excel_type: daily
+    page_no: 1
+    page_size: 100
+    locale: en
 
-storage:
-  table: daily_upi_transactions
+paths:
+  raw_dir: pipelines/daily_upi_transactions/raw
+  output_dir: pipelines/daily_upi_transactions/output
+  # For Colab: /content/extraction/pipelines/daily_upi_transactions/raw
+
+browser:
+  headless: true
+  timeout: 30000  # milliseconds
+  wait_for_selector: "#root"  # React app root element
+  wait_timeout: 10000  # milliseconds to wait for API calls
+
+validation:
+  min_rows: 1
+  allow_empty: false
+  date_format: "%Y-%m-%d"  # Will be detected dynamically
