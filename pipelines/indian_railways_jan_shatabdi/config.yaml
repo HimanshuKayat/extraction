@@ -1,0 +1,54 @@
+# Indian Railways Jan Shatabdi Trains Pipeline Configuration
+dataset:
+  name: indian_railways_jan_shatabdi
+  canonical_columns:
+    - Train_Number
+    - Train_Name
+    - Source_Station
+    - Destination_Station
+    - Departure_Time
+    - Arrival_Time
+    - Travel_Time
+    - Days_of_Running
+    - Classes_Available
+    - Distance_KM
+    - Stops
+
+source:
+  base_url: https://indianrailways.gov.in/railwayboard/view_section.jsp
+  params:
+    lang: 0
+    id: 0,1,304,366,537,3143
+  # Alternative data sources if main URL fails
+  fallback_urls:
+    - https://enquiry.indianrail.gov.in/
+    - https://indianrailapi.com/
+    - https://www.railway.gov.in/
+
+paths:
+  raw_dir: pipelines/indian_railways_jan_shatabdi/raw
+  output_dir: pipelines/indian_railways_jan_shatabdi/output
+  metadata_dir: pipelines/indian_railways_jan_shatabdi/metadata
+
+scraping:
+  timeout: 30
+  max_retries: 3
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+  table_selectors:
+    - "table"
+    - ".train-table"
+    - "#train-data"
+
+train_types:
+  jan_shatabdi:
+    name: "Jan Shatabdi Express"
+    prefixes: ["JAN SHATABDI", "JAN SHATBDI", "JAN-SHATABDI"]
+    train_numbers: ["12055", "12056", "12057", "12058", "12059", "12060", "12061", "12062"]
+    
+validation:
+  min_rows: 1
+  required_columns:
+    - Train_Number
+    - Train_Name
+    - Source_Station
+    - Destination_Station
