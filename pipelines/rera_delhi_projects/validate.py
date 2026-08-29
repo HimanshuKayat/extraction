@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
 Validate module for RERA Delhi Projects pipeline.
-Validates project data and PDF downloads.
+Validates the parsed data.
 """
 import json
 import yaml
-import re
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 
 
 class RERAValidator:
@@ -20,12 +19,9 @@ class RERAValidator:
             self.config = yaml.safe_load(f)
 
         self.output_dir = Path(self.config['paths']['output_dir'])
-        self.pdf_dir = Path(self.config['paths']['pdf_dir'])
         self.canonical_columns = self.config['dataset']['canonical_columns']
         self.min_rows = self.config['validation']['min_rows']
-        self.require_pdf = self.config['validation']['require_pdf_download']
-        self.allowed_extensions = self.config['validation']['allowed_extensions']
-        self.max_pdf_size_mb = self.config['validation']['max_pdf_size_mb']
+        self.required_columns = self.config['validation']['required_columns']
 
     def _find_latest_parsed_file(self) -> Optional[Path]:
         """Find the most recent parsed data file."""
@@ -34,49 +30,6 @@ class RERAValidator:
             return None
         parsed_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
         return parsed_files[0]
-
-    def _validate_project_id(self, project_id: str) -> bool:
-        """Validate project ID format."""
-        if not project_id:
-            return False
-        # Check if it contains letters and numbers
-        return bool(re.search(r'[A-Za-z]', project_id)) and bool(re.search(r'\d', project_id))
-
-    def _validate_registration_number(self, reg_num: str) -> bool:
-        """Validate registration number format."""
-        if not reg_num:
-            return True  # Optional field
-        # Should contain some alphanumeric characters
-        return len(reg_num) >= 4 and bool(re.search(r'[A-Za-z0-9]', reg_num))
-
-    def _validate_pdf_file(self, pdf_path: str) -> Tuple[bool, str]:
-        """
-        Validate PDF file exists and is valid.
-        Returns (is_valid, error_message).
-        """
-        if not pdf_path:
-            return False, "PDF path is empty"
-
-        path = Path(pdf_path)
-
-        # Check if file exists
-        if not path.exists():
-            return False, f"PDF file not found: {pdf_path}"
-
-        # Check extension
-        if path.suffix.lower() not in self.allowed_extensions:
-            return False, f"Invalid file extension: {path.suffix}"
-
-        # Check file size
-        file_size_mb = path.stat().st_size / (1024 * 1024)
-        if file_size_mb > self.max_pdf_size_mb:
-            return False, f"PDF too large: {file_size_mb:.2f} MB"
-
-        # Check if file is non-empty
-        if path.stat().st_size == 0:
-            return False, "PDF file is empty"
-
-        return True, ""
 
     def validate(self, parsed_data: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
@@ -91,118 +44,99 @@ class RERAValidator:
 
             with open(parsed_file, 'r') as f:
                 data = json.load(f)
-                parsed_data = data.get('projects', [])
+                parsed_data = data.get('records', [])
 
         if not parsed_data:
             raise ValueError(f"Dataset is empty (min_rows={self.min_rows})")
 
-        print(f"Validating {len(parsed_data)} projects")
+        print(f"Validating {len(parsed_data)} records")
 
-        # Validation results
         results = {
-            'total_projects': len(parsed_data),
-            'valid_projects': 0,
-            'invalid_projects': 0,
+            'total_records': len(parsed_data),
+            'valid_records': 0,
+            'invalid_records': 0,
             'errors': [],
-            'warnings': [],
-            'pdf_stats': {
-                'downloaded': 0,
-                'missing': 0,
-                'corrupt': 0,
-                'total_size_mb': 0
-            }
+            'warnings': []
         }
 
-        # Validate each project
-        for i, project in enumerate(parsed_data):
-            project_errors = []
-            project_warnings = []
+        # Validate each record
+        for i, record in enumerate(parsed_data):
+            errors = []
+            warnings = []
 
-            # 1. Validate Project_ID
-            project_id = project.get('Project_ID', '')
-            if not project_id:
-                project_errors.append("Project_ID is empty")
-            elif not self._validate_project_id(project_id):
-                project_warnings.append(f"Project_ID format might be invalid: {project_id}")
+            # Check required columns
+            for col in self.required_columns:
+                if col not in record or not record[col]:
+                    errors.append(f"Missing required column: {col}")
 
-            # 2. Validate Project_Name
-            project_name = project.get('Project_Name', '')
-            if not project_name or project_name == 'Unknown':
-                project_warnings.append("Project_Name is missing or default")
+            # Validate Registration_Number
+            reg_num = record.get('Registration_Number', '')
+            if reg_num and not any(c.isdigit() for c in reg_num):
+                warnings.append(f"Registration number might be invalid: {reg_num}")
 
-            # 3. Validate PDF
-            pdf_path = project.get('PDF_Local_Path', '')
-            download_status = project.get('Download_Status', 'unknown')
+            # Validate Project_Name
+            if not record.get('Project_Name', ''):
+                errors.append("Project name is missing")
 
-            if self.require_pdf or download_status == 'success':
-                is_valid, error = self._validate_pdf_file(pdf_path)
-                if is_valid:
-                    results['pdf_stats']['downloaded'] += 1
-                    # Add file size
-                    if pdf_path:
-                        path = Path(pdf_path)
-                        if path.exists():
-                            results['pdf_stats']['total_size_mb'] += path.stat().st_size / (1024 * 1024)
-                else:
-                    if 'not found' in error.lower():
-                        results['pdf_stats']['missing'] += 1
-                    else:
-                        results['pdf_stats']['corrupt'] += 1
-                    project_errors.append(f"PDF validation failed: {error}")
-
-            # 4. Check if required fields are present
-            for col in self.canonical_columns:
-                if col not in project:
-                    project_errors.append(f"Missing required field: {col}")
-
-            # Determine project validity
-            is_valid = len(project_errors) == 0
+            # Determine validity
+            is_valid = len(errors) == 0
 
             if is_valid:
-                results['valid_projects'] += 1
+                results['valid_records'] += 1
             else:
-                results['invalid_projects'] += 1
+                results['invalid_records'] += 1
                 results['errors'].append({
-                    'project_index': i,
-                    'project_name': project.get('Project_Name', 'Unknown'),
-                    'errors': project_errors,
-                    'warnings': project_warnings
+                    'record_index': i,
+                    'registration_number': record.get('Registration_Number', 'Unknown'),
+                    'errors': errors,
+                    'warnings': warnings
                 })
 
-            # Add warnings separately
-            if project_warnings:
-                results['warnings'].append({
-                    'project_index': i,
-                    'project_name': project.get('Project_Name', 'Unknown'),
-                    'warnings': project_warnings
-                })
+            if warnings:
+                results['warnings'].extend(warnings)
+
+        # Check minimum rows
+        if results['valid_records'] < self.min_rows:
+            results['valid'] = False
+            results['message'] = f"Only {results['valid_records']} valid records (min: {self.min_rows})"
+        else:
+            results['valid'] = True
+            results['message'] = f"All {results['valid_records']} records are valid"
 
         # Save validation report
         report_file = self.output_dir / f"validation_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         with open(report_file, 'w') as f:
             json.dump(results, f, indent=2)
 
-        print(f"Validation results: {results['valid_projects']}/{results['total_projects']} projects valid")
+        print(f"Validation results: {results['valid_records']}/{results['total_records']} records valid")
         if results['warnings']:
             print(f"Warnings: {len(results['warnings'])}")
         if results['errors']:
             print(f"Errors: {len(results['errors'])}")
-            for error in results['errors'][:3]:  # Show first 3 errors
-                print(f"  - Project {error['project_index']+1}: {', '.join(error['errors'][:2])}")
+            for error in results['errors'][:3]:
+                print(f"  - {error['registration_number']}: {', '.join(error['errors'][:2])}")
 
         return results
 
 
 if __name__ == "__main__":
-    # For standalone testing
+    """Main entry point for validation."""
     config_path = Path(__file__).parent / 'config.yaml'
+
+    if not config_path.exists():
+        print(f"Config file not found: {config_path}")
+        exit(1)
+
     validator = RERAValidator(str(config_path))
 
     try:
         results = validator.validate()
-        if results['valid_projects'] > 0:
-            print("Validation passed!")
+        if results['valid']:
+            print(f"\n✓ Validation passed: {results['message']}")
+            exit(0)
         else:
-            print("Validation failed!")
+            print(f"\n✗ Validation failed: {results['message']}")
+            exit(1)
     except Exception as e:
-        print(f"Validation failed: {e}")
+        print(f"✗ Validation failed: {e}")
+        exit(1)
