@@ -70,4 +70,53 @@ class DailyUPIPipeline:
             validation_results = self.validator.validate(parsed_data)
             if not validation_results['valid']:
                 print("ERROR: Validation failed")
-                print
+                return False
+            print("✓ Validation passed")
+
+            # Step 4: Write CSV
+            print("\n[4/4] Writing CSV...")
+            csv_file = self.output_dir / f"{self.dataset_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            
+            with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=self.config['dataset']['canonical_columns'])
+                writer.writeheader()
+                for row in parsed_data:
+                    writer.writerow(row)
+            
+            print(f"✓ CSV written: {csv_file}")
+
+            # Print final success
+            print("\n" + "=" * 70)
+            print("SUCCESS")
+            print("=" * 70)
+            print(f"Dataset: {self.dataset_name}")
+            print(f"Rows: {len(parsed_data)}")
+            print(f"Output: {csv_file}")
+            print("=" * 70)
+
+            return True
+
+        except Exception as e:
+            print(f"\nERROR: Pipeline failed - {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
+
+async def main():
+    """Main entry point."""
+    config_path = Path(__file__).parent / 'config.yaml'
+
+    if not config_path.exists():
+        print(f"Config file not found: {config_path}")
+        return False
+
+    pipeline = DailyUPIPipeline(str(config_path))
+    success = await pipeline.run()
+    return success
+
+
+if __name__ == "__main__":
+    # For standalone execution
+    success = asyncio.run(main())
+    sys.exit(0 if success else 1)
