@@ -76,12 +76,12 @@ class IndianRailwaysPipeline:
             else:
                 print("\n[1/4] Skipping crawl (using existing data)")
 
-            # Step 2: Parse
+            # Step 2: Parse - This will now use JSON data first
             print("\n[2/4] Parsing Jan Shatabdi train data...")
             try:
                 parsed_data, parsed_file = self.parser.parse()
-            except FileNotFoundError:
-                print("ERROR: No data found. Run without --skip-crawl first.")
+            except Exception as e:
+                print(f"ERROR: Parsing failed - {e}")
                 return False
             
             if not parsed_data:
@@ -93,17 +93,24 @@ class IndianRailwaysPipeline:
 
             # Step 3: Validate
             print("\n[3/4] Validating train data...")
-            validation_results = self.validator.validate(parsed_data)
-            
-            valid_count = validation_results.get('valid_trains', 0)
-            total_count = validation_results.get('total_trains', 0)
-            
-            if valid_count == 0:
-                print("WARNING: No valid trains found")
-                print(f"  Total trains: {total_count}")
-                print(f"  Invalid trains: {validation_results.get('invalid_trains', 0)}")
-            else:
-                print(f"✓ {valid_count}/{total_count} trains valid")
+            try:
+                validation_results = self.validator.validate(parsed_data)
+                
+                valid_count = validation_results.get('valid_trains', 0)
+                total_count = validation_results.get('total_trains', 0)
+                
+                if valid_count == 0:
+                    print("WARNING: No valid trains found")
+                    print(f"  Total trains: {total_count}")
+                    print(f"  Invalid trains: {validation_results.get('invalid_trains', 0)}")
+                else:
+                    print(f"✓ {valid_count}/{total_count} trains valid")
+            except ValueError as e:
+                if "Dataset is empty" in str(e):
+                    print("WARNING: Dataset is empty, skipping validation")
+                    validation_results = {'valid_trains': 0, 'total_trains': 0}
+                else:
+                    raise
 
             # Step 4: Export CSV
             print("\n[4/4] Exporting to CSV...")
@@ -119,8 +126,7 @@ class IndianRailwaysPipeline:
             print("SUCCESS" if parsed_data else "COMPLETED WITH WARNINGS")
             print("=" * 70)
             print(f"Dataset: {self.dataset_name}")
-            print(f"Total Trains: {total_count}")
-            print(f"Valid Trains: {valid_count}")
+            print(f"Total Trains: {len(parsed_data)}")
             if csv_file:
                 print(f"Output CSV: {csv_file}")
             print("=" * 70)
