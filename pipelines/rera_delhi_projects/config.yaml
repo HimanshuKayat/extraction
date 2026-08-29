@@ -2,47 +2,33 @@
 dataset:
   name: rera_delhi_projects
   canonical_columns:
-    - Project_ID
+    - Registration_Number
     - Project_Name
     - Promoter_Name
     - District
-    - Registration_Number
     - Registration_Date
-    - PDF_URL
-    - PDF_Local_Path
-    - Download_Status
+    - Status
+    - Category
+    - Address
     - Download_Date
 
 source:
   base_url: https://erera.co.in/reradelhiindex/PublicView/RegisteredProjectDetail
-  api_endpoint: https://erera.co.in/reradelhiindex/PublicView/RegisteredProjectDetail
-  # The site uses POST requests with form data
-  # We'll need to extract project listings from HTML
-  project_listing_url: https://erera.co.in/reradelhiindex/PublicView/RegisteredProjectDetail
-  
+  excel_export_url: https://erera.co.in/reradelhiindex/PublicView/ExportExcel
+  # The Excel download endpoint might be different, will be discovered
+
 paths:
   raw_dir: pipelines/rera_delhi_projects/raw
   output_dir: pipelines/rera_delhi_projects/output
-  pdf_dir: pipelines/rera_delhi_projects/pdfs
   metadata_dir: pipelines/rera_delhi_projects/metadata
-  # For Colab: /content/extraction/pipelines/rera_delhi_projects/
 
 download:
   max_retries: 3
-  timeout: 60  # seconds
-  chunk_size: 8192
-  concurrent_downloads: 5
-  pdf_filename_pattern: "{registration_number}_{project_name}.pdf"
-  resume_downloads: true
-  
-browser:
-  headless: true
-  timeout: 60000  # milliseconds
-  wait_for_selector: "table"
-  wait_timeout: 10000
+  timeout: 60
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 validation:
   min_rows: 1
-  require_pdf_download: true
-  allowed_extensions: ['.pdf']
-  max_pdf_size_mb: 50
+  required_columns:
+    - Registration_Number
+    - Project_Name
